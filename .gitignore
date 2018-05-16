@@ -1,2 +1,7 @@
 
 /.cpcache
+
+## Intellij
+
+/*.iml
+/.idea
