@@ -5,3 +5,10 @@
 
 /*.iml
 /.idea
+
+## Compiled
+/target
+
+## Output
+.rebel_readline_history
+
