@@ -1,12 +1,16 @@
 (ns ^:figwheel-hooks lajter.web.main
   (:require
+    [devtools.core :as devtools]
+    [lajter.logger :refer [log]]
     [lajter.core]))
 
-(defn -main [& args]
+(defn ^:after-load runit! []
   (lajter.core/reloaded))
 
-(defn ^:after-load on-reload! []
-  (-main))
+(defn -main [& args]
+  (enable-console-print!)
+  (devtools/install!)
+  (runit!))
 
-(-main)
-(prn *ns* " loaded")
+(defonce call-main-once (-main))
+(log *ns* " loaded")
