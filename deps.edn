@@ -7,8 +7,8 @@
   medley                    {:mvn/version "1.0.0"}
 
   cljsjs/create-react-class {:mvn/version "15.6.2-0"}
-  cljsjs/react              {:mvn/version "16.2.0-3"}
-  cljsjs/react-dom          {:mvn/version "16.2.0-3"}
+  cljsjs/react              {:mvn/version "16.3.2-0"}
+  cljsjs/react-dom          {:mvn/version "16.3.2-0"}
   ;; For om.dom
   org.omcljs/om             {:mvn/version "1.0.0-beta3"}
   }
