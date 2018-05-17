@@ -1,15 +1,20 @@
 (ns lajter.core
   (:require
-    #?@(:cljs [[react]
-               [create-react-class]
-               [react-dom]
-               [goog.object :as gobj]])))
+    [clojure.set :as set]
+    #?(:cljs [react :as react])
+    ))
 
 (def foo 1)
 
-(def class
+#_(def class
   {:render
    (fn [props]
      [:div "foo"])})
 
 ;; Make this trigger. We need a main.
+
+(defn reloaded []
+  (prn "RELOADED :D")
+  (prn "LOL")
+  (prn "FOOOOOOOOLxKDSOK")
+  #?(:cljs (prn react/render)))

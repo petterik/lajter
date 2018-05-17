@@ -1,5 +1,5 @@
 {:paths
- ["src" "target" "resources"]
+ ["src"]
  :deps
  {org.clojure/clojure       {:mvn/version "1.10.0-alpha4" :scope "provided"}
   org.clojure/clojurescript {:mvn/version "1.10.238" :scope "provided"}
@@ -15,7 +15,7 @@
  :aliases
  {:dev
   {:extra-paths
-   ["env/dev"]
+   ["env/dev" "target" "resources"]
    :extra-deps
    {com.bhauman/figwheel-main       {:mvn/version "0.1.0-SNAPSHOT"}
     com.bhauman/rebel-readline-cljs {:mvn/version "0.1.3"}}

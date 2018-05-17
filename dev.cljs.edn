@@ -1,0 +1,2 @@
+^{:watch-dirs ["env/dev" "src" "test"]}
+{:main "lajter.web.main"}
