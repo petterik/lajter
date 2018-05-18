@@ -3,6 +3,7 @@
      (:require-macros [lajter.core :refer [with-this set-method! set-methods!]]))
   (:require
     [lajter.logger :refer [log]]
+    [lajt.parser :as parser]
     [om.dom :as dom]
     #?@(:cljs [[react :as react]
                [react-dom :as react-dom]
@@ -166,7 +167,6 @@
    :render
    (fn [props]
      (dom/div nil
-              "Rendering experiment :Dx"
               (dom/span nil (str "props: " props))
               (dom/span nil (str " state: " (get-state)))))
    :getDerivedStateFromProps
@@ -180,27 +180,69 @@
 
 (defn create-instance [klass props]
   #?(:cljs
-     (react/createElement klass #js {:clj$props       props
-                                     :clj$component?  true
-                                     :clj$react-class ExperimentComponent})))
+     (react/createElement
+       klass
+       #js {:clj$props       props
+            :clj$component?  true
+            :clj$react-class ExperimentComponent})))
+
+;; TODO: Replace with component's protocol.
+(defprotocol IStoppable
+  (stop! [this]))
+
+(defprotocol IEnvironment
+  (to-env [this]))
+
+(defprotocol IReconciler
+  (reconcile! [this]))
+
+(defn mount []
+  #?(:cljs
+     (let [app-state (atom {:foo [1 2 3 4]
+                            :bar {:a :b}})
+           target (.getElementById js/document "app")
+           root ExperimentComponent
+           parser (lajt.parser/parser {:read (fn [env k _] (get @(:state env) k))})
+           r (reify
+               IStoppable
+               (stop! [this]
+                 (remove-watch app-state ::reconciler))
+               IEnvironment
+               (to-env [this]
+                 {:state app-state})
+               IReconciler
+               (reconcile! [this]
+                 (let [props (parser (to-env this) (get-query root))]
+                   (react-dom/render (create-instance root props) target))))]
+       (add-watch app-state ::reconciler
+                  (fn [k ref old-state new-state]
+                    (reconcile! r)))
+       r)))
+
+(defonce reconciler-atom (atom nil))
+(defn redef-reconciler []
+  (when-let [r @reconciler-atom]
+    (stop! r))
+  (reset! reconciler-atom (mount)))
 
 (defn experiment []
   #?(:cljs
      (let [elem (create-instance
                   ExperimentComponent
-                  {:foo [1 2 3 4] :bar {:a :b}})]
+                  {:foo [1] :bar {:a "test"}})
+           r @reconciler-atom]
        (log "query works? "
             (= (:query experiment-component-map)
                (get-query ExperimentComponent)
                (get-query elem)))
-       (log elem)
-       (log (.getElementById js/document "app"))
-       (let [app-div (.getElementById js/document "app")]
-         (react-dom/render elem app-div))
 
+       (log "env: " (to-env r))
+       #_(swap! (:state (to-env r)) update :foo pop)
        )))
 
 (defn reloaded []
   (log "RELOADED :D")
-
+  (when (or (nil? @reconciler-atom))
+    (redef-reconciler))
+  (reconcile! @reconciler-atom)
   (experiment))
