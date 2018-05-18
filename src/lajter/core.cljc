@@ -65,11 +65,28 @@
                  `(set-method! ~sym ~obj ~f))
                (partition 2 sym-f-pairs)))))
 
+(defprotocol IQuery
+  (query [this])
+  (children [this]))
+
+(defn component? [x]
+  #?(:cljs
+     (boolean
+       (some-> (.-props x) (gobj/get  "clj$component?" nil)))))
+
+(defn get-query [x]
+  #?(:cljs
+     (query (cond-> x
+                    (component? x)
+                    (-> .-props (gobj/get "clj$react-class"))))))
+
 (defn ->react-class [{:keys [display-name render shouldComponentUpdate
                              getDerivedStateFromProps
                              componentDidMount getSnapshotBeforeUpdate
                              componentDidUpdate componentWillUnmount
-                             componentDidCatch]}]
+                             componentDidCatch
+                             query
+                             children]}]
   #?(:cljs
      (let [obj #js {
                     ;; Constructor gets defined by react-create-class
@@ -128,6 +145,10 @@
                                                              old-state)]
                        (when (not= old-state derived)
                          #js {:clj$state derived}))))))
+         (specify! klass
+           IQuery
+           (query [this] query)
+           (children [this] children))
          klass))))
 
 (def react-class
@@ -137,27 +158,41 @@
 
 ;; Make this trigger. We need a main.
 
+(def experiment-component-map
+  {:query
+   [:foo {:bar [:a]}]
+   :displayName
+   "experiment"
+   :render
+   (fn [props]
+     (dom/div nil
+              "Rendering experiment :Dx"
+              (dom/span nil (str "props: " props))
+              (dom/span nil (str " state: " (get-state)))))
+   :getDerivedStateFromProps
+   (fn [props]
+     {:initial-state (get-in props [:bar :a])})})
+
 (def ExperimentComponent
-  (->react-class
-    {:displayName
-     "experiment"
-     :render
-     (fn [props]
-       (dom/div nil
-                "Rendering experiment :Dx"
-                (dom/span nil (str "props: " props))
-                (dom/span nil (str " state: " (get-state)))))
-     :getDerivedStateFromProps
-     (fn [props]
-       {:initial-state (get-in props [:bar :a])})}))
+  (->react-class experiment-component-map))
 
 (log ExperimentComponent)
 
+(defn create-instance [klass props]
+  #?(:cljs
+     (react/createElement klass #js {:clj$props       props
+                                     :clj$component?  true
+                                     :clj$react-class ExperimentComponent})))
+
 (defn experiment []
   #?(:cljs
-     (let [elem (react/createElement
+     (let [elem (create-instance
                   ExperimentComponent
-                  #js {:clj$props {:foo [1 2 3 4] :bar {:a :b}}})]
+                  {:foo [1 2 3 4] :bar {:a :b}})]
+       (log "query works? "
+            (= (:query experiment-component-map)
+               (get-query ExperimentComponent)
+               (get-query elem)))
        (log elem)
        (log (.getElementById js/document "app"))
        (let [app-div (.getElementById js/document "app")]
