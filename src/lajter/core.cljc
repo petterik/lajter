@@ -3,15 +3,14 @@
      (:require-macros [lajter.core :refer [with-this set-method! set-methods!]]))
   (:require
     [lajter.logger :refer [log]]
-    [lajt.parser :as parser]
+    [lajter.protocols :as p]
+    [lajt.parser]
     [om.dom :as dom]
     #?@(:cljs [[react :as react]
                [react-dom :as react-dom]
                [create-react-class :as create-react-class]
                [goog.object :as gobj]])
     ))
-
-(def foo 1)
 
 (defprotocol IProps
   (-get-props [this]))
@@ -70,10 +69,20 @@
   (query [this])
   (children [this]))
 
+(defn reconciler? [x]
+  (satisfies? p/IReconciler x))
+
 (defn component? [x]
   #?(:cljs
      (boolean
        (some-> (.-props x) (gobj/get  "clj$component?" nil)))))
+
+(defn get-reconciler [x]
+  {:pre [(or (component? x) (reconciler? x))]}
+  #?(:cljs
+     (cond-> x
+             (component? x)
+             (-> .-props (gobj/get "clj$reconciler")))))
 
 (defn get-query [x]
   #?(:cljs
@@ -178,12 +187,13 @@
 
 (log ExperimentComponent)
 
-(defn create-instance [klass props]
+(defn create-instance [reconciler klass props]
   #?(:cljs
      (react/createElement
        klass
        #js {:clj$props       props
             :clj$component?  true
+            :clj$reconciler  reconciler
             :clj$react-class ExperimentComponent})))
 
 ;; TODO: Replace with component's protocol.
@@ -193,30 +203,106 @@
 (defprotocol IEnvironment
   (to-env [this]))
 
-(defprotocol IReconciler
-  (reconcile! [this]))
+(defprotocol IHistory
+  (add-history! [this history-id historic-value])
+  (get-history [this history-id])
+  (get-most-recent-id [this]))
+
+(def ^:dynamic *raf*)
+
+#?(:cljs
+   (defn- queue-render! [f]
+     (cond
+       (fn? *raf*) (*raf* f)
+       (not (exists? js/requestAnimationFrame))
+       (js/setTimeout f 16)
+       :else
+       (js/requestAnimationFrame f))))
+
+(defn schedule-render! [reconciler]
+  #?(:cljs
+     (when (p/schedule-render! reconciler)
+       (queue-render! #(p/reconcile! reconciler)))))
+
+
+(defn schedule-sends! [reconciler]
+  (when (p/schedule-sends! reconciler)
+    #?(:cljs
+       (p/send! reconciler))))
+
+(defn transact!
+  ([query] (transact! *this* query))
+  ([x query]
+    (let [reconciler (cond-> x (component? x) (get-reconciler))
+          {:keys [history parser remotes state] :as env} (to-env reconciler)
+          #?@(:cljs [history-id (random-uuid)] :clj
+                    [history-id (java.util.UUID/randomUUID)])
+          _ (when (some? history)
+              (add-history! history history-id (deref state)))
+          ;; Perform mutations
+          local-parse (parser (assoc env ::history-id history-id)
+                              query
+                              nil)
+          remote-parses (into {}
+                              (map (juxt identity #(parser env query %)))
+                              remotes)]
+      (doseq [[target remote-query] remote-parses]
+        (p/queue-sends! reconciler target remote-query))
+      (schedule-sends! reconciler))))
 
 (defn mount []
   #?(:cljs
      (let [app-state (atom {:foo [1 2 3 4]
                             :bar {:a :b}})
+           send-fn (fn [target query])
+           reconciler-state (atom {})
            target (.getElementById js/document "app")
            root ExperimentComponent
-           parser (lajt.parser/parser {:read (fn [env k _] (get @(:state env) k))})
+           parser (lajt.parser/parser
+                    {:read   (fn [env k _]
+                               (when (nil? (::history-id env))
+                                 (get @(:state env) k)))
+                     :mutate (fn [env k p]
+                               (when (nil? (:target env))
+                                 (condp = k
+                                   'foo/conj
+                                   (swap! (:state env) update :foo conj (rand-int 100))
+                                   'bar/add
+                                   (swap! (:state env) update :bar assoc
+                                          (rand-int 100)
+                                          (rand-int 100)))))})
            r (reify
                IStoppable
                (stop! [this]
                  (remove-watch app-state ::reconciler))
                IEnvironment
                (to-env [this]
-                 {:state app-state})
-               IReconciler
+                 {:state app-state
+                  :parser parser})
+               p/IReconciler
                (reconcile! [this]
+                 (swap! reconciler-state dissoc :scheduled-render?)
                  (let [props (parser (to-env this) (get-query root))]
-                   (react-dom/render (create-instance root props) target))))]
+                   (react-dom/render (create-instance this root props) target)))
+               (schedule-render! [this]
+                 (let [[old _] (swap-vals! reconciler-state assoc :scheduled-render? true)]
+                   (not (:scheduled-render? old))))
+               (schedule-sends! [this]
+                 (let [[old _] (swap-vals! reconciler-state assoc :scheduled-sends? true)]
+                   (not (:scheduled-sends? old))))
+               (queue-sends! [this remote-target query]
+                 (swap! reconciler-state update-in
+                        [:queued-sends remote-target]
+                        (fnil into []) query))
+               (send! [this]
+                 (let [[old _] (swap-vals! reconciler-state assoc
+                                           :queued-sends {}
+                                           :scheduled-sends? nil)]
+                   (doseq [[target query] (:queued-sends old)]
+                     (send-fn this target query)))))]
        (add-watch app-state ::reconciler
                   (fn [k ref old-state new-state]
-                    (reconcile! r)))
+                    (schedule-render! r)))
        r)))
 
 (defonce reconciler-atom (atom nil))
@@ -227,7 +313,7 @@
 
 (defn experiment []
   #?(:cljs
-     (let [elem (create-instance
+     (let [elem (create-instance nil
                   ExperimentComponent
                   {:foo [1] :bar {:a "test"}})
            r @reconciler-atom]
@@ -244,5 +330,5 @@
   (log "RELOADED :D")
   (when (or (nil? @reconciler-atom))
     (redef-reconciler))
-  (reconcile! @reconciler-atom)
+
   (experiment))
