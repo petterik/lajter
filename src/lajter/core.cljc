@@ -46,6 +46,12 @@
         (binding [*this* ~'this]
           ~@body))))
 
+#?(:cljs
+   (defn wrap-with-this [f]
+     (fn [& args]
+       (with-this
+         (apply f args)))))
+
 #?(:clj
    (defmacro set-method! [sym obj f]
      `(when ~sym
@@ -60,27 +66,34 @@
                (partition 2 sym-f-pairs)))))
 
 (defn ->react-class [{:keys [display-name render shouldComponentUpdate
-                             constructor getDerivedStateFromProps
+                             getDerivedStateFromProps
                              componentDidMount getSnapshotBeforeUpdate
                              componentDidUpdate componentWillUnmount
                              componentDidCatch]}]
   #?(:cljs
-     (let [obj #js {:display-name
+     (let [obj #js {
+                    ;; Constructor gets defined by react-create-class
+                    ;; and it (seems) to call getInitialState. We return
+                    ;; an empty state to initialize it to something
+                    ;; to avoid the warning
+                    ;; Component: Did not properly initialize state during construction. Expected state to be an object, but it was null.
+                    ;; See: https://github.com/reactjs/reactjs.org/issues/796
+                    :getInitialState
+                    (fn [] #js {})
+                    :display-name
                     display-name
                     :render
                     (fn []
                       (with-this
                         (render (get-props))))
                     :shouldComponentUpdate
-                    (fn [next-props next-state]
-                      (with-this
-                        (or (not= (get-props) (get-props next-props))
-                            (not= (get-state) (get-state next-state)))))}]
+                    (if (some? shouldComponentUpdate)
+                      (wrap-with-this shouldComponentUpdate)
+                      (fn [next-props next-state]
+                        (with-this
+                          (or (not= (get-props) (get-props next-props))
+                              (not= (get-state) (get-state next-state))))))}]
        (set-methods! obj
-         constructor
-         (fn [props]
-           (with-this
-             (constructor props)))
          componentDidMount
          (fn []
            (with-this
@@ -109,15 +122,12 @@
            #_(js* "/** @nocollapse */")
            (set! (.-getDerivedStateFromProps klass)
                  (fn [next-props prev-state]
-                   (prn "CALLING getDerivedStateFromProps")
                    (with-this
                      (let [old-state (get-state prev-state)
-                           derived (getDerivedStateFromProps (get-props next-props) old-state)]
-                       (cond
-                         (not= old-state derived)
-                         #js {:clj$state derived}
-                         (nil? prev-state)
-                         #js {}))))))
+                           derived (getDerivedStateFromProps (get-props next-props)
+                                                             old-state)]
+                       (when (not= old-state derived)
+                         #js {:clj$state derived}))))))
          klass))))
 
 (def react-class
@@ -127,21 +137,27 @@
 
 ;; Make this trigger. We need a main.
 
-(defonce ExperimentComponent
+(def ExperimentComponent
   (->react-class
-    {:displayName "experiment"
-     :render      (fn [props]
-                    (dom/div nil
-                             "Rendering experiment :Dx"
-                             (dom/span nil (str "props: " props))
-                             (dom/span nil (str "state: " (get-state)))))
-     :getDerivedStateFromProps (fn [props]
-                                 {:initial-state (:bar (:a props))})}))
+    {:displayName
+     "experiment"
+     :render
+     (fn [props]
+       (dom/div nil
+                "Rendering experiment :Dx"
+                (dom/span nil (str "props: " props))
+                (dom/span nil (str " state: " (get-state)))))
+     :getDerivedStateFromProps
+     (fn [props]
+       {:initial-state (get-in props [:bar :a])})}))
+
+(log ExperimentComponent)
 
 (defn experiment []
   #?(:cljs
-     (let [elem (react/createElement ExperimentComponent
-                                     #js {:clj$props {:foo [1 2 3] :bar {:a :b}}})]
+     (let [elem (react/createElement
+                  ExperimentComponent
+                  #js {:clj$props {:foo [1 2 3 4] :bar {:a :b}}})]
        (log elem)
        (log (.getElementById js/document "app"))
        (let [app-div (.getElementById js/document "app")]
