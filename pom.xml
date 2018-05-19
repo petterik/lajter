@@ -12,24 +12,9 @@
       <version>1.10.0-alpha4</version>
     </dependency>
     <dependency>
-      <groupId>org.clojure</groupId>
-      <artifactId>clojurescript</artifactId>
-      <version>1.10.217</version>
-    </dependency>
-    <dependency>
-      <groupId>org.clojars.petterik</groupId>
-      <artifactId>lajt</artifactId>
-      <version>0.1.1-SNAPSHOT</version>
-    </dependency>
-    <dependency>
-      <groupId>medley</groupId>
-      <artifactId>medley</artifactId>
-      <version>1.0.0</version>
-    </dependency>
-    <dependency>
-      <groupId>org.clojure</groupId>
-      <artifactId>test.check</artifactId>
-      <version>0.10.0-alpha2</version>
+      <groupId>expound</groupId>
+      <artifactId>expound</artifactId>
+      <version>0.5.0</version>
     </dependency>
     <dependency>
       <groupId>com.clojure-goes-fast</groupId>
@@ -37,14 +22,44 @@
       <version>0.1.0</version>
     </dependency>
     <dependency>
-      <groupId>expound</groupId>
-      <artifactId>expound</artifactId>
-      <version>0.5.0</version>
+      <groupId>cljsjs</groupId>
+      <artifactId>react-dom</artifactId>
+      <version>16.3.2-0</version>
     </dependency>
     <dependency>
-      <groupId>com.bhauman</groupId>
-      <artifactId>rebel-readline-cljs</artifactId>
-      <version>0.1.1</version>
+      <groupId>org.clojure</groupId>
+      <artifactId>clojurescript</artifactId>
+      <version>1.10.238</version>
+    </dependency>
+    <dependency>
+      <groupId>org.omcljs</groupId>
+      <artifactId>om</artifactId>
+      <version>1.0.0-beta3</version>
+    </dependency>
+    <dependency>
+      <groupId>cljsjs</groupId>
+      <artifactId>react</artifactId>
+      <version>16.3.2-0</version>
+    </dependency>
+    <dependency>
+      <groupId>org.clojars.petterik</groupId>
+      <artifactId>lajt</artifactId>
+      <version>0.1.1-SNAPSHOT</version>
+    </dependency>
+    <dependency>
+      <groupId>org.clojure</groupId>
+      <artifactId>test.check</artifactId>
+      <version>0.10.0-alpha2</version>
+    </dependency>
+    <dependency>
+      <groupId>cljsjs</groupId>
+      <artifactId>create-react-class</artifactId>
+      <version>15.6.2-0</version>
+    </dependency>
+    <dependency>
+      <groupId>medley</groupId>
+      <artifactId>medley</artifactId>
+      <version>1.0.0</version>
     </dependency>
   </dependencies>
   <build>

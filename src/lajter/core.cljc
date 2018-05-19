@@ -44,9 +44,17 @@
   ([x] (p/clj-state x)))
 
 #?(:clj
+   (defmacro if-cljs
+     [then else]
+     (if (:ns &env) then else)))
+
+#?(:clj
    (defmacro with-this [& body]
-     `(cljs.core/this-as ~'this
-        (binding [*this* ~'this]
+     (if-cljs
+       `(cljs.core/this-as ~'this
+         (binding [*this* ~'this]
+           ~@body))
+       `(do
           ~@body))))
 
 #?(:cljs
@@ -84,6 +92,140 @@
    (get-full-query (p/get-reconciler *this*)))
   ([reconciler]
    (get-query reconciler)))
+
+(def react-signatures
+  {:shouldComponentUpdate    {:args '[next-props next-state]}
+   :getDerivedStateFromProps {:static? true
+                              :args    '[next-props prev-state]}
+   :render                   {:args [] :call-with '[props]}
+   :componentDidMount        {:args []}
+   :getSnapshotBeforeUpdate  {:args '[prev-props prev-state]}
+   :componentDidUpdate       {:args '[prev-props prev-state snapshot]}
+   :componentWillUnmount     {:args '[]}
+   :componentDidCatch        {:args '[error info]}
+   :display-name             {:fn? false}
+   #_#_:query {:static? true
+           :protocol p/IQuery
+           }})
+
+(def constantly-props (fn [& _] (clj-props)))
+(def constantly-state (fn [& _] (clj-state)))
+
+(def argument-xforms
+  `{~'next-props clj-props
+    ~'next-state clj-state
+    ~'prev-props constantly-props
+    ~'prev-state constantly-state})
+
+(def argument-generators
+  `{~'prev-props constantly-props
+    ~'prev-state constantly-state
+    ~'props      constantly-props
+    ~'state      constantly-state})
+
+(def experiment-component-map
+  {:query
+   [:foo {:bar [:a]}]
+   :displayName
+   "experiment"
+   :render
+   (fn [props]
+     (dom/div nil
+       (dom/span nil (str "props: " props))
+       (dom/span nil (str " state: " (clj-state)))))
+   :getDerivedStateFromProps
+   (fn [props prev-state]
+     {:initial-state (get-in props [:bar :a])})})
+
+(comment
+  (defn- xform-args [args]
+    (mapcat
+      (fn [arg]
+        `[~arg (~(get argument-xforms arg `identity) ~arg)])
+      args))
+
+  (defn- xform-call-with [call-with]
+    (mapcat
+      (fn [arg]
+        (let [generator# (get argument-generators arg)]
+          (when (nil? generator#)
+            (throw
+              (ex-info
+                (str "Now argument generator exists for argument: " arg)
+                {:arg arg})))
+          `[~arg (~generator#)]))
+      call-with))
+
+  (def create-method
+    (fn [[method value]]
+      (let [sig (get react-signatures method)
+            args# (:args sig)
+            call-with# (:call-with sig)
+            arg-bindings# (concat (xform-args args#) (xform-call-with call-with#))]
+        [method `(fn ~args#
+                   (lajter.core/with-this
+                     ~(if (empty? arg-bindings#)
+                        `(~value)
+                        `(let [~@arg-bindings#]
+                           ~(if (some? call-with#)
+                              `(~value ~@call-with#)
+                              `(~value ~@args#))))))])))
+
+  (defmacro create-methods [m]
+    (into {} (map create-method) m))
+
+  (create-method [:getDerivedStateFromProps
+                  (fn [props prev-state]
+                    {:initial-state (get-in props [:bar :a])})])
+
+  (def comp-m
+    {:render
+     (fn [props])
+     :getDerivedStateFromProps
+     (fn [props prev-state]
+       {:initial-state (get-in props [:bar :a])})
+     :getSnapshotBeforeUpdate
+     (fn [props state]
+       {:snap 1})
+     :componentDidUpdate
+     (fn [props state snapshot]
+       (:snap snapshot))})
+
+  (macroexpand-1
+    '(create-methods
+     {:render (fn [props] (+ 1))
+      :getDerivedStateFromProps
+              (fn [props prev-state]
+                {:initial-state (get-in props [:bar :a])})}))
+  (create-methods
+    {:render
+     (fn [props])
+     :getDerivedStateFromProps
+     (fn [props prev-state]
+       {:initial-state (get-in props [:bar :a])})
+     :getSnapshotBeforeUpdate
+     (fn [props state]
+       {:snap 1})
+     :componentDidUpdate
+     (fn [props state snapshot]
+       (:snap snapshot))})
+
+  (fn [[method value]]
+    (fn [next-props prev-state]
+     (with-this
+       (let [next-props (clj-props next-props)
+             prev-state ((fn [_] (clj-state)) prev-state)]
+         ;; when :call-with :args
+         (value next-props prev-state)))))
+
+  (fn [[method value]]
+    ;; render
+    (fn []
+      (with-this
+        ;; when :call-with ['props]
+        (let [props (constantly-props)]
+          (value props)))))
+  )
 
 (defn ->react-class [{:keys [display-name render shouldComponentUpdate
                              getDerivedStateFromProps
