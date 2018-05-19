@@ -13,44 +13,35 @@
                [goog.object :as gobj]])
     ))
 
-(defprotocol IHasReconciler
-  (get-reconciler [this]))
-
-(defprotocol IReactElement
-  (js-props [this])
-  (js-state [this]))
-
-(defprotocol IQuery
-  (query [this]))
-
 #?(:cljs
-   (extend-type object
-     IReactElement
-     (js-props [this] (.-props this))
-     (js-state [this] (.-state this))
-     IHasReconciler
-     (get-reconciler [this]
-       (some-> (js-props this)
-               (gobj/get "clj$reconciler")))
-     IQuery
-     (query [this]
-       (some-> (js-props this)
-               (gobj/get "clj$react-class" nil)
-               (query)))))
+   (do
+     (defn- get-js-prop [obj k]
+       (some-> (or (.-props obj) obj) (gobj/get k)))
+
+     (extend-type object
+       p/IReactElement
+       (clj-props [this]
+         (get-js-prop this "lajter$clj-props"))
+       (clj-state [this]
+         (some-> (or (.-state this) this)
+                 (gobj/get "lajter$clj-state")))
+       p/IHasReconciler
+       (get-reconciler [this]
+         (get-js-prop this "lajter$reconciler"))
+       p/IQuery
+       (query [this]
+         (some-> (get-js-prop this "lajter$react-class")
+                 (p/query))))))
 
 (def ^:dynamic *this*)
 
 (defn clj-props
-  ([] (clj-props (js-props *this*)))
-  ([js-props]
-   #?(:cljs
-      (gobj/get js-props "clj$props"))))
+  ([] (p/clj-props *this*))
+  ([x] (p/clj-props x)))
 
 (defn clj-state
-  ([] (clj-state (js-state *this*)))
-  ([js-state]
-   #?(:cljs
-      (gobj/get js-state "clj$state"))))
+  ([] (p/clj-state *this*))
+  ([x] (p/clj-state x)))
 
 #?(:clj
    (defmacro with-this [& body]
@@ -81,16 +72,16 @@
   (satisfies? p/IReconciler x))
 
 (defn component? [x]
-  (and (instance? IReactElement x)
-       (some? (js-props x))))
+  (and (instance? p/IReactElement x)
+       (some? (clj-props x))))
 
 (defn get-query
-  ([] (query *this*))
-  ([x] (query x)))
+  ([] (p/query *this*))
+  ([x] (p/query x)))
 
 (defn get-full-query
   ([]
-   (get-full-query (get-reconciler *this*)))
+   (get-full-query (p/get-reconciler *this*)))
   ([reconciler]
    (get-query reconciler)))
 
@@ -157,9 +148,9 @@
                      (let [old-state (clj-state prev-state)
                            derived (getDerivedStateFromProps (clj-props next-props) old-state)]
                        (when (not= old-state derived)
-                         #js {:clj$state derived}))))))
+                         #js {:lajter$clj-state derived}))))))
          (specify! klass
-           IQuery
+           p/IQuery
            (query [_] query))
          klass))))
 
@@ -186,9 +177,9 @@
 
 (defn create-instance [reconciler klass props]
   #?(:cljs
-     (react/createElement klass #js {:clj$props props
-                                     :clj$reconciler reconciler
-                                     :clj$react-class klass})))
+     (react/createElement klass #js {:lajter$clj-props props
+                                     :lajter$reconciler reconciler
+                                     :lajter$react-class klass})))
 
 ;; TODO: Replace with component's protocol.
 (defprotocol IStoppable
@@ -222,7 +213,7 @@
 (defn transact!
   ([query] (transact! *this* query))
   ([x query]
-    (let [reconciler (cond-> x (component? x) (get-reconciler))
+    (let [reconciler (cond-> x (component? x) (p/get-reconciler))
           {:keys [history parser remotes state] :as env} (to-env reconciler)
           #?@(:cljs [history-id (random-uuid)] :clj
                     [history-id (java.util.UUID/randomUUID)])
@@ -268,8 +259,8 @@
                (to-env [this]
                  {:state app-state
                   :parser parser})
-               IQuery
-               (query [_] (query root))
+               p/IQuery
+               (query [_] (p/query root))
                p/IReconciler
                (reconcile! [this]
                  (swap! reconciler-state dissoc :scheduled-render?)
@@ -320,5 +311,7 @@
   (log "RELOADED :D")
   (when (or (nil? @reconciler-atom))
     (redef-reconciler))
+
+  (schedule-render! @reconciler-atom)
 
   (experiment))
