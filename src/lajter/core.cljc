@@ -4,6 +4,7 @@
   (:require
     [lajter.logger :refer [log]]
     [lajter.protocols :as p]
+    [lajter.history :as history]
     [lajt.parser]
     [om.dom :as dom]
     #?@(:cljs [[react :as react]
@@ -12,33 +13,44 @@
                [goog.object :as gobj]])
     ))
 
-(defprotocol IProps
-  (-get-props [this]))
+(defprotocol IHasReconciler
+  (get-reconciler [this]))
 
-(defprotocol IState
-  (-get-state [this]))
+(defprotocol IReactElement
+  (js-props [this])
+  (js-state [this]))
+
+(defprotocol IQuery
+  (query [this]))
 
 #?(:cljs
    (extend-type object
-     IProps
-     (-get-props [this]
-       (gobj/get this "clj$props"))
-     IState
-     (-get-state [this]
-       (gobj/get this "clj$state"))))
+     IReactElement
+     (js-props [this] (.-props this))
+     (js-state [this] (.-state this))
+     IHasReconciler
+     (get-reconciler [this]
+       (some-> (js-props this)
+               (gobj/get "clj$reconciler")))
+     IQuery
+     (query [this]
+       (some-> (js-props this)
+               (gobj/get "clj$react-class" nil)
+               (query)))))
 
 (def ^:dynamic *this*)
-(defn get-props
-  ([] (get-props (.-props *this*)))
-  ([this]
-   (when this
-     (-get-props this))))
 
-(defn get-state
-  ([] (get-state (.-state *this*)))
-  ([this]
-   (when this
-     (-get-state this))))
+(defn clj-props
+  ([] (clj-props (js-props *this*)))
+  ([js-props]
+   #?(:cljs
+      (gobj/get js-props "clj$props"))))
+
+(defn clj-state
+  ([] (clj-state (js-state *this*)))
+  ([js-state]
+   #?(:cljs
+      (gobj/get js-state "clj$state"))))
 
 #?(:clj
    (defmacro with-this [& body]
@@ -65,30 +77,22 @@
                  `(set-method! ~sym ~obj ~f))
                (partition 2 sym-f-pairs)))))
 
-(defprotocol IQuery
-  (query [this])
-  (children [this]))
-
 (defn reconciler? [x]
   (satisfies? p/IReconciler x))
 
 (defn component? [x]
-  #?(:cljs
-     (boolean
-       (some-> (.-props x) (gobj/get  "clj$component?" nil)))))
+  (and (instance? IReactElement x)
+       (some? (js-props x))))
 
-(defn get-reconciler [x]
-  {:pre [(or (component? x) (reconciler? x))]}
-  #?(:cljs
-     (cond-> x
-             (component? x)
-             (-> .-props (gobj/get "clj$reconciler")))))
+(defn get-query
+  ([] (query *this*))
+  ([x] (query x)))
 
-(defn get-query [x]
-  #?(:cljs
-     (query (cond-> x
-                    (component? x)
-                    (-> .-props (gobj/get "clj$react-class"))))))
+(defn get-full-query
+  ([]
+   (get-full-query (get-reconciler *this*)))
+  ([reconciler]
+   (get-query reconciler)))
 
 (defn ->react-class [{:keys [display-name render shouldComponentUpdate
                              getDerivedStateFromProps
@@ -112,27 +116,27 @@
                     :render
                     (fn []
                       (with-this
-                        (render (get-props))))
+                        (render (clj-props))))
                     :shouldComponentUpdate
                     (if (some? shouldComponentUpdate)
                       (wrap-with-this shouldComponentUpdate)
                       (fn [next-props next-state]
                         (with-this
-                          (or (not= (get-props) (get-props next-props))
-                              (not= (get-state) (get-state next-state))))))}]
+                          (or (not= (clj-props) (clj-props next-props))
+                              (not= (clj-state) (clj-state next-state))))))}]
        (set-methods! obj
          componentDidMount
          (fn []
            (with-this
-             (componentDidMount (get-props))))
+             (componentDidMount (clj-props))))
          getSnapshotBeforeUpdate
          (fn []
            (with-this
-             (getSnapshotBeforeUpdate (get-props) (get-state))))
+             (getSnapshotBeforeUpdate (clj-props) (clj-state))))
          componentDidUpdate
          (fn [_ _ snapshot]
            (with-this
-             (componentDidUpdate (get-props) (get-state) snapshot)))
+             (componentDidUpdate (clj-props) (clj-state) snapshot)))
          componentWillUnmount
          (fn []
            (with-this
@@ -150,21 +154,14 @@
            (set! (.-getDerivedStateFromProps klass)
                  (fn [next-props prev-state]
                    (with-this
-                     (let [old-state (get-state prev-state)
-                           derived (getDerivedStateFromProps (get-props next-props)
-                                                             old-state)]
+                     (let [old-state (clj-state prev-state)
+                           derived (getDerivedStateFromProps (clj-props next-props) old-state)]
                        (when (not= old-state derived)
                          #js {:clj$state derived}))))))
          (specify! klass
            IQuery
-           (query [this] query)
-           (children [this] children))
+           (query [_] query))
          klass))))
-
-(def react-class
-  {:render
-   (fn [props]
-     [:div "foo"])})
 
 ;; Make this trigger. We need a main.
 
@@ -177,7 +174,7 @@
    (fn [props]
      (dom/div nil
               (dom/span nil (str "props: " props))
-              (dom/span nil (str " state: " (get-state)))))
+              (dom/span nil (str " state: " (clj-state)))))
    :getDerivedStateFromProps
    (fn [props]
      {:initial-state (get-in props [:bar :a])})})
@@ -189,12 +186,9 @@
 
 (defn create-instance [reconciler klass props]
   #?(:cljs
-     (react/createElement
-       klass
-       #js {:clj$props       props
-            :clj$component?  true
-            :clj$reconciler  reconciler
-            :clj$react-class ExperimentComponent})))
+     (react/createElement klass #js {:clj$props props
+                                     :clj$reconciler reconciler
+                                     :clj$react-class klass})))
 
 ;; TODO: Replace with component's protocol.
 (defprotocol IStoppable
@@ -202,11 +196,6 @@
 
 (defprotocol IEnvironment
   (to-env [this]))
-
-(defprotocol IHistory
-  (add-history! [this history-id historic-value])
-  (get-history [this history-id])
-  (get-most-recent-id [this]))
 
 (def ^:dynamic *raf*)
 
@@ -238,7 +227,7 @@
           #?@(:cljs [history-id (random-uuid)] :clj
                     [history-id (java.util.UUID/randomUUID)])
           _ (when (some? history)
-              (add-history! history history-id (deref state)))
+              (history/add! history history-id (deref state)))
           ;; Perform mutations
           local-parse (parser (assoc env ::history-id history-id)
                               query
@@ -279,6 +268,8 @@
                (to-env [this]
                  {:state app-state
                   :parser parser})
+               IQuery
+               (query [_] (query root))
                p/IReconciler
                (reconcile! [this]
                  (swap! reconciler-state dissoc :scheduled-render?)
@@ -313,10 +304,9 @@
 
 (defn experiment []
   #?(:cljs
-     (let [elem (create-instance nil
-                  ExperimentComponent
-                  {:foo [1] :bar {:a "test"}})
-           r @reconciler-atom]
+     (let [r @reconciler-atom
+           elem (create-instance r ExperimentComponent {:foo [1] :bar {:a "test"}})]
+       (log "elem: " elem)
        (log "query works? "
             (= (:query experiment-component-map)
                (get-query ExperimentComponent)
