@@ -1,7 +1,6 @@
 (ns lajter.core
-  #?(:cljs
-     (:require-macros [lajter.core :refer [with-this set-method! set-methods!]]))
   (:require
+    [lajter.react]
     [lajter.logger :refer [log]]
     [lajter.protocols :as p]
     [lajter.history :as history]
@@ -9,9 +8,7 @@
     [om.dom :as dom]
     #?@(:cljs [[react :as react]
                [react-dom :as react-dom]
-               [create-react-class :as create-react-class]
-               [goog.object :as gobj]])
-    ))
+               [goog.object :as gobj]])))
 
 #?(:cljs
    (do
@@ -33,268 +30,25 @@
          (some-> (get-js-prop this "lajter$react-class")
                  (p/query))))))
 
-(def ^:dynamic *this*)
-
-(defn clj-props
-  ([] (p/clj-props *this*))
-  ([x] (p/clj-props x)))
-
-(defn clj-state
-  ([] (p/clj-state *this*))
-  ([x] (p/clj-state x)))
-
-#?(:clj
-   (defmacro if-cljs
-     [then else]
-     (if (:ns &env) then else)))
-
-#?(:clj
-   (defmacro with-this [& body]
-     (if-cljs
-       `(cljs.core/this-as ~'this
-         (binding [*this* ~'this]
-           ~@body))
-       `(do
-          ~@body))))
-
-#?(:cljs
-   (defn wrap-with-this [f]
-     (fn [& args]
-       (with-this
-         (apply f args)))))
-
-#?(:clj
-   (defmacro set-method! [sym obj f]
-     `(when ~sym
-        (set! (~(symbol (str ".-" sym)) ~obj)
-              ~f))))
-
-#?(:clj
-   (defmacro set-methods! [obj & sym-f-pairs]
-     `(do
-        ~@(map (fn [[sym f]]
-                 `(set-method! ~sym ~obj ~f))
-               (partition 2 sym-f-pairs)))))
-
 (defn reconciler? [x]
   (satisfies? p/IReconciler x))
 
 (defn component? [x]
   (and (instance? p/IReactElement x)
-       (some? (clj-props x))))
+       (some? (lajter.react/clj-props x))))
 
 (defn get-query
-  ([] (p/query *this*))
+  ([] (p/query lajter.react/*this*))
   ([x] (p/query x)))
 
 (defn get-full-query
   ([]
-   (get-full-query (p/get-reconciler *this*)))
+   (get-full-query (p/get-reconciler lajter.react/*this*)))
   ([reconciler]
    (get-query reconciler)))
 
-(def react-signatures
-  {:shouldComponentUpdate    {:args '[next-props next-state]}
-   :getDerivedStateFromProps {:static? true
-                              :args    '[next-props prev-state]}
-   :render                   {:args [] :call-with '[props]}
-   :componentDidMount        {:args []}
-   :getSnapshotBeforeUpdate  {:args '[prev-props prev-state]}
-   :componentDidUpdate       {:args '[prev-props prev-state snapshot]}
-   :componentWillUnmount     {:args '[]}
-   :componentDidCatch        {:args '[error info]}
-   :display-name             {:fn? false}
-   #_#_:query {:static? true
-           :protocol p/IQuery
-           }})
-
-(def constantly-props (fn [& _] (clj-props)))
-(def constantly-state (fn [& _] (clj-state)))
-
-(def argument-xforms
-  `{~'next-props clj-props
-    ~'next-state clj-state
-    ~'prev-props constantly-props
-    ~'prev-state constantly-state})
-
-(def argument-generators
-  `{~'prev-props constantly-props
-    ~'prev-state constantly-state
-    ~'props      constantly-props
-    ~'state      constantly-state})
-
-(def experiment-component-map
-  {:query
-   [:foo {:bar [:a]}]
-   :displayName
-   "experiment"
-   :render
-   (fn [props]
-     (dom/div nil
-       (dom/span nil (str "props: " props))
-       (dom/span nil (str " state: " (clj-state)))))
-   :getDerivedStateFromProps
-   (fn [props prev-state]
-     {:initial-state (get-in props [:bar :a])})})
-
-(comment
-  (defn- xform-args [args]
-    (mapcat
-      (fn [arg]
-        `[~arg (~(get argument-xforms arg `identity) ~arg)])
-      args))
-
-  (defn- xform-call-with [call-with]
-    (mapcat
-      (fn [arg]
-        (let [generator# (get argument-generators arg)]
-          (when (nil? generator#)
-            (throw
-              (ex-info
-                (str "Now argument generator exists for argument: " arg)
-                {:arg arg})))
-          `[~arg (~generator#)]))
-      call-with))
-
-  (def create-method
-    (fn [[method value]]
-      (let [sig (get react-signatures method)
-            args# (:args sig)
-            call-with# (:call-with sig)
-            arg-bindings# (concat (xform-args args#) (xform-call-with call-with#))]
-        [method `(fn ~args#
-                   (lajter.core/with-this
-                     ~(if (empty? arg-bindings#)
-                        `(~value)
-                        `(let [~@arg-bindings#]
-                           ~(if (some? call-with#)
-                              `(~value ~@call-with#)
-                              `(~value ~@args#))))))])))
-
-  (defmacro create-methods [m]
-    (into {} (map create-method) m))
-
-  (create-method [:getDerivedStateFromProps
-                  (fn [props prev-state]
-                    {:initial-state (get-in props [:bar :a])})])
-
-  (def comp-m
-    {:render
-     (fn [props])
-     :getDerivedStateFromProps
-     (fn [props prev-state]
-       {:initial-state (get-in props [:bar :a])})
-     :getSnapshotBeforeUpdate
-     (fn [props state]
-       {:snap 1})
-     :componentDidUpdate
-     (fn [props state snapshot]
-       (:snap snapshot))})
-
-  (macroexpand-1
-    '(create-methods
-     {:render (fn [props] (+ 1))
-      :getDerivedStateFromProps
-              (fn [props prev-state]
-                {:initial-state (get-in props [:bar :a])})}))
-  (create-methods
-    {:render
-     (fn [props])
-     :getDerivedStateFromProps
-     (fn [props prev-state]
-       {:initial-state (get-in props [:bar :a])})
-     :getSnapshotBeforeUpdate
-     (fn [props state]
-       {:snap 1})
-     :componentDidUpdate
-     (fn [props state snapshot]
-       (:snap snapshot))})
-
-  (fn [[method value]]
-    (fn [next-props prev-state]
-     (with-this
-       (let [next-props (clj-props next-props)
-             prev-state ((fn [_] (clj-state)) prev-state)]
-         ;; when :call-with :args
-         (value next-props prev-state)))))
-
-  (fn [[method value]]
-    ;; render
-    (fn []
-      (with-this
-        ;; when :call-with ['props]
-        (let [props (constantly-props)]
-          (value props)))))
-  )
-
-(defn ->react-class [{:keys [display-name render shouldComponentUpdate
-                             getDerivedStateFromProps
-                             componentDidMount getSnapshotBeforeUpdate
-                             componentDidUpdate componentWillUnmount
-                             componentDidCatch
-                             query
-                             children]}]
-  #?(:cljs
-     (let [obj #js {
-                    ;; Constructor gets defined by react-create-class
-                    ;; and it (seems) to call getInitialState. We return
-                    ;; an empty state to initialize it to something
-                    ;; to avoid the warning
-                    ;; Component: Did not properly initialize state during construction. Expected state to be an object, but it was null.
-                    ;; See: https://github.com/reactjs/reactjs.org/issues/796
-                    :getInitialState
-                    (fn [] #js {})
-                    :display-name
-                    display-name
-                    :render
-                    (fn []
-                      (with-this
-                        (render (clj-props))))
-                    :shouldComponentUpdate
-                    (if (some? shouldComponentUpdate)
-                      (wrap-with-this shouldComponentUpdate)
-                      (fn [next-props next-state]
-                        (with-this
-                          (or (not= (clj-props) (clj-props next-props))
-                              (not= (clj-state) (clj-state next-state))))))}]
-       (set-methods! obj
-         componentDidMount
-         (fn []
-           (with-this
-             (componentDidMount (clj-props))))
-         getSnapshotBeforeUpdate
-         (fn []
-           (with-this
-             (getSnapshotBeforeUpdate (clj-props) (clj-state))))
-         componentDidUpdate
-         (fn [_ _ snapshot]
-           (with-this
-             (componentDidUpdate (clj-props) (clj-state) snapshot)))
-         componentWillUnmount
-         (fn []
-           (with-this
-             (componentWillUnmount)))
-         componentDidCatch
-         (fn [error info]
-           (with-this
-             (componentDidCatch error info))))
-
-       (let [klass (create-react-class obj)]
-         (when getDerivedStateFromProps
-           ;; Is this nocollapse needed? for this known static methods?
-           ;; I've gotten this idea from om.next.
-           #_(js* "/** @nocollapse */")
-           (set! (.-getDerivedStateFromProps klass)
-                 (fn [next-props prev-state]
-                   (with-this
-                     (let [old-state (clj-state prev-state)
-                           derived (getDerivedStateFromProps (clj-props next-props) old-state)]
-                       (when (not= old-state derived)
-                         #js {:lajter$clj-state derived}))))))
-         (specify! klass
-           p/IQuery
-           (query [_] query))
-         klass))))
+(defn ->react-class [spec]
+  (lajter.react/create-class spec))
 
 ;; Make this trigger. We need a main.
 
@@ -306,10 +60,11 @@
    :render
    (fn [props]
      (dom/div nil
-              (dom/span nil (str "props: " props))
-              (dom/span nil (str " state: " (clj-state)))))
+       (dom/span nil (str "props: " props))
+       (dom/span nil (str " state: " (lajter.react/clj-state)))))
    :getDerivedStateFromProps
-   (fn [props]
+   (fn [props state]
+     (log "in derived state. Props: " props)
      {:initial-state (get-in props [:bar :a])})})
 
 (def ExperimentComponent
@@ -353,7 +108,7 @@
        (p/send! reconciler))))
 
 (defn transact!
-  ([query] (transact! *this* query))
+  ([query] (transact! lajter.react/*this* query))
   ([x query]
     (let [reconciler (cond-> x (component? x) (p/get-reconciler))
           {:keys [history parser remotes state] :as env} (to-env reconciler)
