@@ -5,6 +5,7 @@
     [lajter.protocols :as p]
     [lajter.history :as history]
     [lajt.parser]
+    [lajt.read]
     [clojure.set :as set]
     [om.dom :as dom]
     #?@(:cljs [[goog.object :as gobj]])))
@@ -98,7 +99,7 @@
     (remove-watch (:app-state config) ::reconciler))
   IEnvironment
   (to-env [this]
-    (select-keys config [:parser :state]))
+    (select-keys config [:parser :state :remotes]))
   p/IReconciler
   (react-class [this component-spec]
     (if-let [klass (get (:class-cache @state) component-spec)]
@@ -124,26 +125,31 @@
     (swap! state update-in [:queued-sends remote-target]
            (fnil into []) query))
   (send! [this]
+    (log "SEND!: " @state)
     (let [[old _] (swap-vals! state assoc
                               :queued-sends {}
                               :scheduled-sends? nil)]
       (doseq [[target query] (:queued-sends old)]
-        ((:send-fn config) this target query)))))
+        (when (seq query)
+          ((:send-fn config) this target query))))))
 
 (defn mount [{:as   config}]
-  (let [send-fn (fn [target query]
+  (let [send-fn (fn [reconciler target query]
                   (log "would send query: " query
                        " to target: " target))
         parser (lajt.parser/parser
                  {:lajt.parser/query-plugins
                   [(lajt.parser/dedupe-query-plugin {})]
                   :read
-                  (fn [env k _]
-                    (when (nil? (::history-id env))
-                      (get @(:state env) k)))
+                  (lajt.read/->read-fn
+                    (fn [k]
+                      {:custom (fn [env] (get @(:state env) k))
+                       :remote true})
+                    {})
                   :mutate
                   (fn [env k p]
-                    (when (nil? (:target env))
+                    (if (:target env)
+                      [true (keyword (namespace k))]
                       (condp = k
                         'foo/conj
                         (swap! (:state env) update :foo conj (rand-int 100))

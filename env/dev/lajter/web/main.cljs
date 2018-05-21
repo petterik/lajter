@@ -54,6 +54,7 @@
   (let [config {:root-component ComponentA
                 :root-render    react-dom/render
                 :target         (.getElementById js/document "app")
+                :remotes        [:remote]
                 :state          (atom {:foo [1 2 3 4]
                                        :bar {:a :b}
                                        :baz "foo"})}]
