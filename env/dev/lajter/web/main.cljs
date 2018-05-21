@@ -2,10 +2,14 @@
   (:require
     [devtools.core :as devtools]
     [lajter.logger :refer [log]]
-    [lajter.core]))
+    [lajter.core]
+    [react-dom :as react-dom]))
+
+(def config {:root-render react-dom/render
+             :target      (.getElementById js/document "app")})
 
 (defn ^:after-load runit! []
-  (lajter.core/reloaded))
+  (lajter.core/reloaded config))
 
 (defn -main [& args]
   (enable-console-print!)

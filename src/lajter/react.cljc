@@ -5,11 +5,12 @@
                with-this]]))
   (:require
     [lajter.protocols :as p]
-    [lajter.logger :as logger]
     [clojure.set :as set]
     #?(:clj [medley.core :as medley])
     #?(:cljs [goog.object :as gobj])
-    #?(:cljs [create-react-class :as create-react-class])))
+    #?@(:cljs
+        [[create-react-class :as create-react-class]
+         [react :as react]])))
 
 (def ^:dynamic *this*)
 
@@ -23,6 +24,26 @@
 
 (def constantly-props (fn [& _] (clj-props)))
 (def constantly-state (fn [& _] (clj-state)))
+
+#?(:cljs
+   (do
+     (defn- get-js-prop [obj k]
+       (some-> (or (.-props obj) obj) (gobj/get k)))
+
+     (extend-type object
+       p/IReactElement
+       (clj-props [this]
+         (get-js-prop this "lajter$clj-props"))
+       (clj-state [this]
+         (some-> (or (.-state this) this)
+                 (gobj/get "lajter$clj-state")))
+       p/IHasReconciler
+       (get-reconciler [this]
+         (get-js-prop this "lajter$reconciler"))
+       p/IQuery
+       (query [this]
+         (some-> (get-js-prop this "lajter$react-class")
+                 (p/query))))))
 
 #?(:clj
    (do
@@ -72,7 +93,8 @@
        (fn [sig]
          (let [args# (:args sig)
                call-with# (:call-with sig)
-               arg-bindings# (concat (xform-args args#) (xform-call-with call-with#))
+               arg-bindings# (concat (xform-args args#)
+                                     (xform-call-with call-with#))
                sym# (gensym)]
            (if-not (:fn? sig true)
              `(fn [~sym#] ~sym#)
@@ -153,9 +175,9 @@
                (with-this
                  (or (not= (clj-props) (clj-props next-props))
                      (not= (clj-state) (clj-state next-state)))))}
-        method-specs
-        (apply dissoc spec (set/union static-methods
-                                      static-protocols))
+        method-specs (apply dissoc spec
+                            (set/union static-methods
+                                       static-protocols))
         obj (reduce-kv
               (fn [obj method value]
                 (assoc-obj obj method
@@ -175,4 +197,8 @@
                   (select-keys spec static-protocols))]
       klass)))
 
-
+(defn create-instance [reconciler klass props]
+  #?(:cljs
+     (react/createElement klass #js {:lajter$clj-props props
+                                     :lajter$reconciler reconciler
+                                     :lajter$react-class klass})))

@@ -6,36 +6,20 @@
     [lajter.history :as history]
     [lajt.parser]
     [om.dom :as dom]
-    #?@(:cljs [[react :as react]
-               [react-dom :as react-dom]
-               [goog.object :as gobj]])))
+    #?@(:cljs [[goog.object :as gobj]])))
 
-#?(:cljs
-   (do
-     (defn- get-js-prop [obj k]
-       (some-> (or (.-props obj) obj) (gobj/get k)))
+(defn get-state []
+  (lajter.react/clj-state))
 
-     (extend-type object
-       p/IReactElement
-       (clj-props [this]
-         (get-js-prop this "lajter$clj-props"))
-       (clj-state [this]
-         (some-> (or (.-state this) this)
-                 (gobj/get "lajter$clj-state")))
-       p/IHasReconciler
-       (get-reconciler [this]
-         (get-js-prop this "lajter$reconciler"))
-       p/IQuery
-       (query [this]
-         (some-> (get-js-prop this "lajter$react-class")
-                 (p/query))))))
+(defn get-props []
+  (lajter.react/clj-props))
 
 (defn reconciler? [x]
   (satisfies? p/IReconciler x))
 
 (defn component? [x]
   (and (instance? p/IReactElement x)
-       (some? (lajter.react/clj-props x))))
+       (some? (p/clj-props x))))
 
 (defn get-query
   ([] (p/query lajter.react/*this*))
@@ -46,9 +30,6 @@
    (get-full-query (p/get-reconciler lajter.react/*this*)))
   ([reconciler]
    (get-query reconciler)))
-
-(defn ->react-class [spec]
-  (lajter.react/create-class spec))
 
 ;; Make this trigger. We need a main.
 
@@ -61,22 +42,16 @@
    (fn [props]
      (dom/div nil
        (dom/span nil (str "props: " props))
-       (dom/span nil (str " state: " (lajter.react/clj-state)))))
+       (dom/span nil (str " state: " (get-state)))))
    :getDerivedStateFromProps
    (fn [props state]
      (log "in derived state. Props: " props)
      {:initial-state (get-in props [:bar :a])})})
 
 (def ExperimentComponent
-  (->react-class experiment-component-map))
+  (lajter.react/create-class experiment-component-map))
 
 (log ExperimentComponent)
-
-(defn create-instance [reconciler klass props]
-  #?(:cljs
-     (react/createElement klass #js {:lajter$clj-props props
-                                     :lajter$reconciler reconciler
-                                     :lajter$react-class klass})))
 
 ;; TODO: Replace with component's protocol.
 (defprotocol IStoppable
@@ -127,13 +102,12 @@
         (p/queue-sends! reconciler target remote-query))
       (schedule-sends! reconciler))))
 
-(defn mount []
+(defn mount [{:keys [root-render target]}]
   #?(:cljs
      (let [app-state (atom {:foo [1 2 3 4]
                             :bar {:a :b}})
            send-fn (fn [target query])
            reconciler-state (atom {})
-           target (.getElementById js/document "app")
            root ExperimentComponent
            parser (lajt.parser/parser
                     {:read   (fn [env k _]
@@ -162,7 +136,9 @@
                (reconcile! [this]
                  (swap! reconciler-state dissoc :scheduled-render?)
                  (let [props (parser (to-env this) (get-query root))]
-                   (react-dom/render (create-instance this root props) target)))
+                   (root-render
+                     (lajter.react/create-instance this root props)
+                     target)))
                (schedule-render! [this]
                  (let [[old _] (swap-vals! reconciler-state assoc :scheduled-render? true)]
                    (not (:scheduled-render? old))))
@@ -185,15 +161,15 @@
        r)))
 
 (defonce reconciler-atom (atom nil))
-(defn redef-reconciler []
+(defn redef-reconciler [config]
   (when-let [r @reconciler-atom]
     (stop! r))
-  (reset! reconciler-atom (mount)))
+  (reset! reconciler-atom (mount config)))
 
 (defn experiment []
   #?(:cljs
      (let [r @reconciler-atom
-           elem (create-instance r ExperimentComponent {:foo [1] :bar {:a "test"}})]
+           elem (lajter.react/create-instance r ExperimentComponent {:foo [1] :bar {:a "test"}})]
        (log "elem: " elem)
        (log "query works? "
             (= (:query experiment-component-map)
@@ -204,10 +180,10 @@
        #_(swap! (:state (to-env r)) update :foo pop)
        )))
 
-(defn reloaded []
+(defn reloaded [config]
   (log "RELOADED :D")
   (when (or (nil? @reconciler-atom))
-    (redef-reconciler))
+    (redef-reconciler config))
 
   (schedule-render! @reconciler-atom)
 
