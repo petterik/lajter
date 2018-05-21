@@ -15,8 +15,5 @@
   (clj-state [this])
   (update-clj-state! [this f]))
 
-(defprotocol IReactClass
-  (class-spec [this]))
-
-(defprotocol IQuery
-  (query [this]))
+(defprotocol ILajterClass
+  (spec-map [this]))

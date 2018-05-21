@@ -4,6 +4,7 @@
               [react-method-wrappers
                with-this]]))
   (:require
+    [lajter.logger]
     [lajter.protocols :as p]
     [clojure.set :as set]
     #?(:clj [medley.core :as medley])
@@ -37,10 +38,10 @@
        p/IHasReconciler
        (get-reconciler [this]
          (get-js-prop this "lajter$reconciler"))
-       p/IQuery
-       (query [this]
+       p/ILajterClass
+       (spec-map [this]
          (some-> (get-js-prop this "lajter$react-class")
-                 (p/query))))))
+                 (p/spec-map))))))
 
 #?(:clj
    (do
@@ -104,10 +105,13 @@
      (defmacro react-method-wrappers [m]
        (medley/map-vals react-method-wrapper (second m)))))
 
+(def static-wrappers
+  (react-method-wrappers
+    '{:getDerivedStateFromProps {:args [next-props prev-state]}}))
+
 (def method-wrappers
   (react-method-wrappers
     '{:shouldComponentUpdate    {:args [next-props next-state]}
-      :getDerivedStateFromProps {:args [next-props prev-state]}
       :render                   {:args [] :call-with [props state]}
       :getSnapshotBeforeUpdate  {:args [prev-props prev-state]}
       :componentDidUpdate       {:args [prev-props prev-state snapshot]}
@@ -115,9 +119,6 @@
       :componentWillUnmount     {:args []}
       :componentDidCatch        {:args [error info]}
       :displayName              {:fn? false}}))
-
-(def static-methods #{:getDerivedStateFromProps})
-(def static-protocols #{:query})
 
 (def method-middleware
   {:getDerivedStateFromProps
@@ -138,30 +139,23 @@
                      ::componentDidCatch
                      ::display-name]))
 
-(defn assoc-obj [obj k v]
-  #?(:cljs
-     (doto obj
-       (gobj/set (name k) v))
-     :clj (assoc obj k v)))
-
-(defn implement-protocols [klass spec]
-  ;;TODO: unhard-code this
-  #?(:cljs
-     (specify! klass
-       p/IReactClass
-       (class-spec [this] spec)
-       p/IQuery
-       (query [this] (:query spec)))
-     ;; TODO: Figure out the clj side.
-     :clj klass))
-
-(defn wrap-method [method value]
-  (let [wrapper (get method-wrappers method)]
+(defn- wrap-method [wrappers method value]
+  (let [wrapper (get wrappers method)]
     (if-let [mw (get method-middleware method)]
       (wrapper (mw value))
       (wrapper value))))
 
+(defn assoc-wrappers [x wrappers spec]
+  (let [assoc-obj (fn [obj [k v]]
+                    #?(:cljs (doto obj (gobj/set (name k) v))
+                       :clj  (assoc obj k v)))]
+    (->> (select-keys spec (keys wrappers))
+         (map (fn [[k v]]
+                [k (wrap-method wrappers k v)]))
+         (reduce assoc-obj x))))
+
 (defn create-class [spec]
+  (lajter.logger/log " spec: " spec)
   (let [initial-obj
         #js {:getInitialState
              (fn [] #js {})
@@ -172,24 +166,14 @@
                            (p/clj-props next-props))
                      (not= (p/clj-state *this*)
                            (p/clj-state next-state)))))}
-        method-specs (apply dissoc spec
-                            (set/union static-methods
-                                       static-protocols))
-        obj (reduce-kv
-              (fn [obj method value]
-                (assoc-obj obj method
-                           (wrap-method method value)))
-              initial-obj
-              method-specs)]
+        obj (assoc-wrappers initial-obj method-wrappers spec)]
     (let [#?@(:cljs [klass (create-react-class obj)]
               :clj  [klass obj])
-          klass (reduce-kv
-                  (fn [klass method value]
-                    (assoc-obj klass method
-                               (wrap-method method value)))
-                  klass
-                  (select-keys spec static-methods))
-          klass (implement-protocols klass spec)]
+          klass (assoc-wrappers klass static-wrappers spec)
+          #?@(:cljs [klass (doto klass
+                             (specify!
+                               p/ILajterClass
+                               (spec-map [this] spec)))])]
       klass)))
 
 (defn create-instance [reconciler klass props]

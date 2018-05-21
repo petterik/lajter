@@ -8,21 +8,30 @@
     [react-dom :as react-dom]
     [om.dom :as dom]))
 
-(def experiment-component-map
+
+(def ComponentB
+  {:query [:foo]
+   :displayName "B"
+   :render (fn [this props state]
+             (dom/div nil
+               (dom/p nil " Component B")
+               (dom/p nil " Props: " props)))})
+
+(def ComponentA
   {:query
    [:foo {:bar [:a]}]
-   :displayName
-   "experiment"
+   :children [ComponentB]
+   :displayName "A"
    :render
    (fn [this props state]
      (dom/div
        nil
-       (dom/span nil (str "props: " props))
-       (dom/span nil (str " state: " state))
-       (dom/span nil (str " counter: " (:counter state)))
-       (dom/button #js {:onClick #(la/update-state! this update
-                                                    :counter
-                                                    inc)})))
+       (dom/p nil (str "props: " props))
+       (dom/p nil (str " state: " state))
+       (dom/p nil (str " counter: " (:counter state)))
+       (dom/button #js {:onClick
+                        #(la/update-state! this update :counter inc)})
+       (la/render-child this ComponentB)))
    :getDerivedStateFromProps
    (fn [_ props state]
      (log "in derived state. Props: " props)
@@ -31,9 +40,7 @@
 
 
 (defn ^:after-load runit! []
-  (let [ExperimentComponent (lajter.react/create-class
-                              experiment-component-map)
-        config {:root-component ExperimentComponent
+  (let [config {:root-component (lajter.react/create-class ComponentA)
                 :root-render react-dom/render
                 :target      (.getElementById js/document "app")}]
 

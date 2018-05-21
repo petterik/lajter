@@ -29,10 +29,13 @@
        (some? (p/clj-props x))))
 
 (defn get-query [x]
-  (p/query x))
+  (:query (p/spec-map x)))
 
-(defn get-full-query [reconciler]
-  (get-query reconciler))
+(defn get-root [reconciler]
+  (get-in reconciler [:config :root-component]))
+
+(defn get-root-query [reconciler]
+  (get-query (get-root reconciler)))
 
 ;; Make this trigger. We need a main.
 
@@ -89,8 +92,6 @@
   IEnvironment
   (to-env [this]
     (select-keys config [:parser :state]))
-  p/IQuery
-  (query [_] (p/query (:root-component config)))
   p/IReconciler
   (reconcile! [this]
     (swap! state dissoc :scheduled-render?)
@@ -143,8 +144,12 @@
                  (schedule-render! r)))
     r))
 
-(defn get-root [reconciler]
-  (get-in reconciler [:config :root-component]))
+(defn join-key [component]
+  ())
+
+(defn render-child [this child-component]
+  (let [props (get-props this)
+        child-join-key (join-key child-component)]))
 
 (defonce reconciler-atom (atom nil))
 (defn redef-reconciler [config]
