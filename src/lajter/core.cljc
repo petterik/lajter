@@ -131,13 +131,12 @@
                               :scheduled-sends? nil)]
       (doseq [[target query] (:queued-sends old)]
         (when (seq query)
-          ((:send-fn config) this target query))))))
+          (let [cb (fn [value]
+                     ((:merge-fn config) this value query target))]
+            ((:send-fn config) this cb query target)))))))
 
 (defn mount [{:as   config}]
-  (let [send-fn (fn [reconciler target query]
-                  (log "would send query: " query
-                       " to target: " target))
-        parser (lajt.parser/parser
+  (let [parser (lajt.parser/parser
                  {:lajt.parser/query-plugins
                   [(lajt.parser/dedupe-query-plugin {})]
                   :read
@@ -159,8 +158,24 @@
                         (swap! (:state env) update :bar assoc
                                (rand-int 100)
                                (rand-int 100)))))})
+        remote-state (atom @(:state config))
+        send-fn (fn [reconciler cb query target]
+                  (log "would send query: " query
+                       " to target: " target)
+                  #?(:cljs
+                     (js/setTimeout
+                       #(let [remote-parse (parser (assoc (to-env reconciler)
+                                                     :state remote-state)
+                                                   query)]
+                          (cb remote-parse))
+                       2000)))
+        merge-fn (fn [reconciler value query target]
+                   (swap! (get-in reconciler [:config :state])
+                          merge
+                          value))
         r (->Reconciler (assoc config :parser parser
-                                      :send-fn send-fn)
+                                      :send-fn send-fn
+                                      :merge-fn merge-fn)
                         (atom {}))]
     (log "state: " (:state config))
     (add-watch (:state config) ::reconciler
