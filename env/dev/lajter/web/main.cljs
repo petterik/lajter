@@ -22,16 +22,22 @@
                                       #(la/update-state! this update :counter (fnil inc 0))}
                                  (dom/span nil "Update counter"))
                      (dom/button #js{:onClick
-                                      #(la/transact! this '[(foo/conj)])}
+                                     #(la/transact! this '[(foo/conj)])}
                                  (dom/span nil "Add to foo"))
                      (dom/button #js{:onClick
                                      #(la/transact! this '[(foo/pop)])}
-                                 (dom/span nil "Remove from foo"))))})
+                                 (dom/span nil "Remove from foo"))
+                     (dom/button #js {:onClick (la/get-computed this :update-parent)}
+                                 (dom/span nil "Update parent state"))))})
 
 (def ComponentA
   {:lajter/id       :lajter.web.main/ComponentA
    :lajter/children [ComponentB]
    :lajter/query    [:foo {:bar [:a]}]
+   :lajter/computed {ComponentB
+                     (fn [parent]
+                       {:update-parent
+                        #(la/update-state! parent update :counter inc)})}
    :displayName     "lajter.web.main/ComponentA"
    :render          (fn [this props state]
                       (dom/div
@@ -48,7 +54,6 @@
                       (log "in derived state. Props: " props)
                       {:initial-state (get-in props [:bar :a])
                        :counter       (-> props :foo last)})})
-
 
 (defn ^:after-load runit! []
   (let [config {:root-component ComponentA

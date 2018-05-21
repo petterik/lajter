@@ -15,7 +15,8 @@
   (raw-clj-props [this])
   (clj-props [this] "returns the clojure props for this element.")
   (clj-state [this])
-  (update-clj-state! [this f]))
+  (update-clj-state! [this f])
+  (clj-computed [this]))
 
 (defprotocol ILajterClass
   (spec-map [this]))

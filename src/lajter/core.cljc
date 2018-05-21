@@ -19,6 +19,12 @@
 (defn update-state! [this f & args]
   (p/update-clj-state! this #(apply f % args)))
 
+(defn get-computed
+  ([this]
+   (p/clj-computed this))
+  ([this k]
+    (get (p/clj-computed this) k)))
+
 (defn set-state! [this value]
   (update-state! this (fn [_] value)))
 
@@ -113,7 +119,7 @@
           root-class (p/react-class this root-component)
           props (parser (to-env this) (get-query root-class))]
       (root-render
-        (lajter.react/create-instance this root-class props)
+        (lajter.react/create-instance this root-class props nil)
         target)))
   (schedule-render! [this]
     (let [[old _] (swap-vals! state assoc :scheduled-render? true)]
@@ -184,11 +190,16 @@
     r))
 
 (defn render-child [this child-component]
-  (let [reconciler (p/get-reconciler this)]
+  (let [reconciler (p/get-reconciler this)
+        computed (some-> (p/spec-map this)
+                         :lajter/computed
+                         (get child-component)
+                         (as-> f (f this)))]
     (lajter.react/create-instance
       reconciler
       (p/react-class reconciler child-component)
-      (p/raw-clj-props this))))
+      (p/raw-clj-props this)
+      computed)))
 
 (defonce reconciler-atom (atom nil))
 (defn redef-reconciler [config]

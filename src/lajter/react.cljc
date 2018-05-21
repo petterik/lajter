@@ -33,6 +33,8 @@
        (clj-state [this]
          (some-> (or (.-state this) this)
                  (gobj/get "lajter$clj-state")))
+       (clj-computed [this]
+         (get-js-prop this "lajter$clj-computed"))
        (update-clj-state! [this f]
          (.setState this (fn [state]
                            #js {:lajter$clj-state
@@ -191,10 +193,11 @@
                                (spec-map [this] spec)))])]
       klass)))
 
-(defn create-instance [reconciler klass props]
+(defn create-instance [reconciler klass props computed]
   (let [clj-props (select-keys props (:lajter.query/keys (p/spec-map klass)))]
     #?(:cljs
        (react/createElement klass #js {:lajter$clj-props     clj-props
                                        :lajter$raw-clj-props props
                                        :lajter$reconciler    reconciler
-                                       :lajter$react-class   klass}))))
+                                       :lajter$react-class   klass
+                                       :lajter$clj-computed  computed}))))
