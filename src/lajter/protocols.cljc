@@ -12,7 +12,11 @@
 
 (defprotocol IReactElement
   (clj-props [this])
-  (clj-state [this]))
+  (clj-state [this])
+  (update-clj-state! [this f]))
+
+(defprotocol IReactClass
+  (class-spec [this]))
 
 (defprotocol IQuery
   (query [this]))

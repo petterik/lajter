@@ -12,18 +12,10 @@
         [[create-react-class :as create-react-class]
          [react :as react]])))
 
-(def ^:dynamic *this*)
+(def ^:dynamic ^:private *this*)
 
-(defn clj-props
-  ([] (p/clj-props *this*))
-  ([x] (p/clj-props x)))
-
-(defn clj-state
-  ([] (p/clj-state *this*))
-  ([x] (p/clj-state x)))
-
-(def constantly-props (fn [& _] (clj-props)))
-(def constantly-state (fn [& _] (clj-state)))
+(def constantly-props (fn [this & _] (p/clj-props this)))
+(def constantly-state (fn [this & _] (p/clj-state this)))
 
 #?(:cljs
    (do
@@ -37,6 +29,11 @@
        (clj-state [this]
          (some-> (or (.-state this) this)
                  (gobj/get "lajter$clj-state")))
+       (update-clj-state! [this f]
+         (.setState this (fn [state]
+                           #js {:lajter$clj-state
+                                (f (p/clj-state state))}))
+         this)
        p/IHasReconciler
        (get-reconciler [this]
          (get-js-prop this "lajter$reconciler"))
@@ -59,35 +56,31 @@
           (do
             ~@body)))
 
-     (def argument-xforms
-       `{~'next-props clj-props
-         ~'next-state clj-state
-         ~'prev-props constantly-props
-         ~'prev-state constantly-state})
-
-     (def argument-generators
-       `{~'prev-props constantly-props
-         ~'prev-state constantly-state
-         ~'props      constantly-props
-         ~'state      constantly-state})
-
      (defn- xform-args [args]
-       (mapcat
-         (fn [arg]
-           `[~arg (~(get argument-xforms arg `identity) ~arg)])
-         args))
+       (let [argument-xforms `{~'next-props p/clj-props
+                               ~'prev-props p/clj-props
+                               ~'next-state p/clj-state
+                               ~'prev-state p/clj-state}]
+         (mapcat
+           (fn [arg]
+             `[~arg (~(get argument-xforms arg `identity) ~arg)])
+           args)))
 
      (defn- xform-call-with [call-with]
-       (mapcat
-         (fn [arg]
-           (let [generator# (get argument-generators arg)]
-             (when (nil? generator#)
-               (throw
-                 (ex-info
-                   (str "Now argument generator exists for argument: " arg)
-                   {:arg arg})))
-             `[~arg (~generator#)]))
-         call-with))
+       (let [argument-generators `{~'prev-props constantly-props
+                                   ~'props      constantly-props
+                                   ~'prev-state constantly-state
+                                   ~'state      constantly-state}]
+         (mapcat
+           (fn [arg]
+             (let [generator# (get argument-generators arg)]
+               (when (nil? generator#)
+                 (throw
+                   (ex-info
+                     (str "Now argument generator exists for argument: " arg)
+                     {:arg arg})))
+               `[~arg (~generator# lajter.react/*this*)]))
+           call-with)))
 
      (def react-method-wrapper
        (fn [sig]
@@ -105,8 +98,8 @@
                        `(~sym#)
                        `(let [~@arg-bindings#]
                           ~(if (some? call-with#)
-                             `(~sym# ~@call-with#)
-                             `(~sym# ~@args#)))))))))))
+                             `(~sym# lajter.react/*this* ~@call-with#)
+                             `(~sym# lajter.react/*this* ~@args#)))))))))))
 
      (defmacro react-method-wrappers [m]
        (medley/map-vals react-method-wrapper (second m)))))
@@ -115,10 +108,10 @@
   (react-method-wrappers
     '{:shouldComponentUpdate    {:args [next-props next-state]}
       :getDerivedStateFromProps {:args [next-props prev-state]}
-      :render                   {:args [] :call-with [props]}
-      :componentDidMount        {:args []}
+      :render                   {:args [] :call-with [props state]}
       :getSnapshotBeforeUpdate  {:args [prev-props prev-state]}
       :componentDidUpdate       {:args [prev-props prev-state snapshot]}
+      :componentDidMount        {:args []}
       :componentWillUnmount     {:args []}
       :componentDidCatch        {:args [error info]}
       :displayName              {:fn? false}}))
@@ -129,8 +122,8 @@
 (def method-middleware
   {:getDerivedStateFromProps
    (fn [f]
-     (fn [next-props old-state]
-       (let [next-state (f next-props old-state)]
+     (fn [this next-props old-state]
+       (let [next-state (f this next-props old-state)]
          (when (not= old-state next-state)
            #js {:lajter$clj-state next-state}))))})
 
@@ -155,6 +148,8 @@
   ;;TODO: unhard-code this
   #?(:cljs
      (specify! klass
+       p/IReactClass
+       (class-spec [this] spec)
        p/IQuery
        (query [this] (:query spec)))
      ;; TODO: Figure out the clj side.
@@ -173,8 +168,10 @@
              :shouldComponentUpdate
              (fn [next-props next-state]
                (with-this
-                 (or (not= (clj-props) (clj-props next-props))
-                     (not= (clj-state) (clj-state next-state)))))}
+                 (or (not= (p/clj-props *this*)
+                           (p/clj-props next-props))
+                     (not= (p/clj-state *this*)
+                           (p/clj-state next-state)))))}
         method-specs (apply dissoc spec
                             (set/union static-methods
                                        static-protocols))
@@ -192,9 +189,7 @@
                                (wrap-method method value)))
                   klass
                   (select-keys spec static-methods))
-          klass (implement-protocols
-                  klass
-                  (select-keys spec static-protocols))]
+          klass (implement-protocols klass spec)]
       klass)))
 
 (defn create-instance [reconciler klass props]
