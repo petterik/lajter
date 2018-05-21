@@ -29,7 +29,11 @@
        (some? (p/clj-props x))))
 
 (defn get-query [x]
-  (:query (p/spec-map x)))
+  (let [spec (cond-> x (not (map? x)) p/spec-map)]
+    (not-empty
+      (into (:lajter/query spec [])
+            (mapcat get-query)
+            (:lajter/children spec)))))
 
 (defn get-root [reconciler]
   (get-in reconciler [:config :root-component]))
@@ -68,7 +72,8 @@
        (p/send! reconciler))))
 
 (defn transact! [x query]
-  (let [reconciler (cond-> x (component? x) (p/get-reconciler))
+  (log " getting reconciler from : " x)
+  (let [reconciler (p/get-reconciler x)
         {:keys [history parser remotes state] :as env} (to-env reconciler)
         #?@(:cljs [history-id (random-uuid)] :clj
                   [history-id (java.util.UUID/randomUUID)])
@@ -86,6 +91,8 @@
     (schedule-sends! reconciler)))
 
 (defrecord Reconciler [config state]
+  p/IHasReconciler
+  (get-reconciler [this] this)
   IStoppable
   (stop! [this]
     (remove-watch (:app-state config) ::reconciler))
@@ -93,12 +100,19 @@
   (to-env [this]
     (select-keys config [:parser :state]))
   p/IReconciler
+  (react-class [this component-spec]
+    (if-let [klass (get (:class-cache @state) component-spec)]
+      klass
+      (let [klass (lajter.react/create-class component-spec)]
+        (swap! state update :class-cache assoc component-spec klass)
+        klass)))
   (reconcile! [this]
     (swap! state dissoc :scheduled-render?)
     (let [{:keys [parser root-render target root-component]} config
-          props (parser (to-env this) (get-query root-component))]
+          root-class (p/react-class this root-component)
+          props (parser (to-env this) (get-query root-class))]
       (root-render
-        (lajter.react/create-instance this root-component props)
+        (lajter.react/create-instance this root-class props)
         target)))
   (schedule-render! [this]
     (let [[old _] (swap-vals! state assoc :scheduled-render? true)]
@@ -116,40 +130,44 @@
       (doseq [[target query] (:queued-sends old)]
         ((:send-fn config) this target query)))))
 
-(defn mount [config]
-  (let [app-state (atom {:foo [1 2 3 4]
-                         :bar {:a :b}})
-        send-fn (fn [target query]
+(defn mount [{:as   config}]
+  (let [send-fn (fn [target query]
                   (log "would send query: " query
                        " to target: " target))
         parser (lajt.parser/parser
-                 {:read   (fn [env k _]
-                            (when (nil? (::history-id env))
-                              (get @(:state env) k)))
-                  :mutate (fn [env k p]
-                            (when (nil? (:target env))
-                              (condp = k
-                                'foo/conj
-                                (swap! (:state env) update :foo conj (rand-int 100))
-                                'bar/add
-                                (swap! (:state env) update :bar assoc
-                                       (rand-int 100)
-                                       (rand-int 100)))))})
-        r (->Reconciler (assoc config :state app-state
-                                      :parser parser
+                 {:lajt.parser/query-plugins
+                  [(lajt.parser/dedupe-query-plugin {})]
+                  :read
+                  (fn [env k _]
+                    (when (nil? (::history-id env))
+                      (get @(:state env) k)))
+                  :mutate
+                  (fn [env k p]
+                    (when (nil? (:target env))
+                      (condp = k
+                        'foo/conj
+                        (swap! (:state env) update :foo conj (rand-int 100))
+                        'foo/pop
+                        (swap! (:state env) update :foo pop)
+                        'bar/add
+                        (swap! (:state env) update :bar assoc
+                               (rand-int 100)
+                               (rand-int 100)))))})
+        r (->Reconciler (assoc config :parser parser
                                       :send-fn send-fn)
                         (atom {}))]
-    (add-watch app-state ::reconciler
+    (log "state: " (:state config))
+    (add-watch (:state config) ::reconciler
                (fn [k ref old-state new-state]
                  (schedule-render! r)))
     r))
 
-(defn join-key [component]
-  ())
-
 (defn render-child [this child-component]
-  (let [props (get-props this)
-        child-join-key (join-key child-component)]))
+  (let [reconciler (p/get-reconciler this)]
+    (lajter.react/create-instance
+      reconciler
+      (p/react-class reconciler child-component)
+      (p/raw-clj-props this))))
 
 (defonce reconciler-atom (atom nil))
 (defn redef-reconciler [config]

@@ -2,6 +2,7 @@
 
 (defprotocol IReconciler
   (reconcile! [this])
+  (react-class [this component-spec])
   (schedule-render! [this])
   (schedule-sends! [this])
   (queue-sends! [this remote-target query])
@@ -11,7 +12,8 @@
   (get-reconciler [this]))
 
 (defprotocol IReactElement
-  (clj-props [this])
+  (raw-clj-props [this])
+  (clj-props [this] "returns the clojure props for this element.")
   (clj-state [this])
   (update-clj-state! [this f]))
 

@@ -5,6 +5,7 @@
                with-this]]))
   (:require
     [lajter.logger]
+    [lajt.parser]
     [lajter.protocols :as p]
     [clojure.set :as set]
     #?(:clj [medley.core :as medley])
@@ -25,6 +26,8 @@
 
      (extend-type object
        p/IReactElement
+       (raw-clj-props [this]
+         (get-js-prop this "lajter$raw-clj-props"))
        (clj-props [this]
          (get-js-prop this "lajter$clj-props"))
        (clj-state [this]
@@ -154,9 +157,21 @@
                 [k (wrap-method wrappers k v)]))
          (reduce assoc-obj x))))
 
+(defn- query-keys
+  "Returns the keys of the component's query."
+  [spec]
+  (let [ks (atom #{})
+        parser (lajt.parser/parser {:read (fn [_ k _]
+                                            (swap! ks conj k)
+                                            nil)})]
+    (parser {} (:lajter/query spec))
+    @ks))
+
 (defn create-class [spec]
-  (lajter.logger/log " spec: " spec)
-  (let [initial-obj
+  (let [ks (query-keys spec)
+        spec (assoc spec :lajter.query/keys ks)
+        _ (lajter.logger/log " spec: " spec)
+        initial-obj
         #js {:getInitialState
              (fn [] #js {})
              :shouldComponentUpdate
@@ -177,7 +192,9 @@
       klass)))
 
 (defn create-instance [reconciler klass props]
-  #?(:cljs
-     (react/createElement klass #js {:lajter$clj-props props
-                                     :lajter$reconciler reconciler
-                                     :lajter$react-class klass})))
+  (let [clj-props (select-keys props (:lajter.query/keys (p/spec-map klass)))]
+    #?(:cljs
+       (react/createElement klass #js {:lajter$clj-props     clj-props
+                                       :lajter$raw-clj-props props
+                                       :lajter$reconciler    reconciler
+                                       :lajter$react-class   klass}))))

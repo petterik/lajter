@@ -10,39 +10,53 @@
 
 
 (def ComponentB
-  {:query [:foo]
-   :displayName "B"
-   :render (fn [this props state]
-             (dom/div nil
-               (dom/p nil " Component B")
-               (dom/p nil " Props: " props)))})
+  {:lajter/id    :lajter.web.main/ComponentB
+   :lajter/query [:foo :baz]
+   :displayName  "lajter.web.main/ComponentB"
+   :render       (fn [this props state]
+                   (dom/div nil
+                     (dom/p nil " Component B")
+                     (dom/p nil (str " Props: " props))
+                     (dom/p nil (str " State: " state))
+                     (dom/button #js {:onClick
+                                      #(la/update-state! this update :counter (fnil inc 0))}
+                                 (dom/span nil "Update counter"))
+                     (dom/button #js{:onClick
+                                      #(la/transact! this '[(foo/conj)])}
+                                 (dom/span nil "Add to foo"))
+                     (dom/button #js{:onClick
+                                     #(la/transact! this '[(foo/pop)])}
+                                 (dom/span nil "Remove from foo"))))})
 
 (def ComponentA
-  {:query
-   [:foo {:bar [:a]}]
-   :children [ComponentB]
-   :displayName "A"
-   :render
-   (fn [this props state]
-     (dom/div
-       nil
-       (dom/p nil (str "props: " props))
-       (dom/p nil (str " state: " state))
-       (dom/p nil (str " counter: " (:counter state)))
-       (dom/button #js {:onClick
-                        #(la/update-state! this update :counter inc)})
-       (la/render-child this ComponentB)))
+  {:lajter/id       :lajter.web.main/ComponentA
+   :lajter/children [ComponentB]
+   :lajter/query    [:foo {:bar [:a]}]
+   :displayName     "lajter.web.main/ComponentA"
+   :render          (fn [this props state]
+                      (dom/div
+                        nil
+                        (dom/p nil (str "props: " props))
+                        (dom/p nil (str " state: " state))
+                        (dom/p nil (str " counter: " (:counter state)))
+                        (dom/button #js {:onClick
+                                         #(la/update-state! this update :counter inc)}
+                                    (dom/span nil "Update counter"))
+                        (la/render-child this ComponentB)))
    :getDerivedStateFromProps
-   (fn [_ props state]
-     (log "in derived state. Props: " props)
-     {:initial-state (get-in props [:bar :a])
-      :counter       0})})
+                    (fn [_ props state]
+                      (log "in derived state. Props: " props)
+                      {:initial-state (get-in props [:bar :a])
+                       :counter       (-> props :foo last)})})
 
 
 (defn ^:after-load runit! []
-  (let [config {:root-component (lajter.react/create-class ComponentA)
-                :root-render react-dom/render
-                :target      (.getElementById js/document "app")}]
+  (let [config {:root-component ComponentA
+                :root-render    react-dom/render
+                :target         (.getElementById js/document "app")
+                :state          (atom {:foo [1 2 3 4]
+                                       :bar {:a :b}
+                                       :baz "foo"})}]
 
     (reset! la/reconciler-atom nil)
     (lajter.core/reloaded config)))
