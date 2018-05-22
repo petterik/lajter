@@ -10,9 +10,7 @@
     [clojure.set :as set]
     #?(:clj [medley.core :as medley])
     #?(:cljs [goog.object :as gobj])
-    #?@(:cljs
-        [[create-react-class :as create-react-class]
-         [react :as react]])))
+    #?(:cljs [react :as react])))
 
 (def ^:dynamic ^:private *this*)
 
@@ -144,20 +142,15 @@
                      ::componentDidCatch
                      ::display-name]))
 
-(defn- wrap-method [wrappers method value]
-  (let [wrapper (get wrappers method)]
-    (if-let [mw (get method-middleware method)]
-      (wrapper (mw value))
-      (wrapper value))))
-
-(defn assoc-wrappers [x wrappers spec]
-  (let [assoc-obj (fn [obj [k v]]
-                    #?(:cljs (doto obj (gobj/set (name k) v))
-                       :clj  (assoc obj k v)))]
-    (->> (select-keys spec (keys wrappers))
-         (map (fn [[k v]]
-                [k (wrap-method wrappers k v)]))
-         (reduce assoc-obj x))))
+(defn- wrap-spec [wrappers spec]
+  (let [wrap-method (fn [[method value]]
+                      (let [wrapper (get wrappers method)]
+                        (if-let [mw (get method-middleware method)]
+                          (wrapper (mw value))
+                          (wrapper value))))]
+    (into {}
+          (map (juxt key wrap-method))
+          (select-keys spec (keys wrappers)))))
 
 (defn- query-keys
   "Returns the keys of the component's query."
@@ -169,24 +162,36 @@
     (parser {} (:lajter/query spec))
     @ks))
 
-(defn create-class [spec]
-  (let [ks (query-keys spec)
-        spec (assoc spec :lajter.query/keys ks)
-        _ (lajter.logger/log " spec: " spec)
-        initial-obj
-        #js {:getInitialState
-             (fn [] #js {})
-             :shouldComponentUpdate
-             (fn [next-props next-state]
-               (with-this
-                 (or (not= (p/clj-props *this*)
-                           (p/clj-props next-props))
-                     (not= (p/clj-state *this*)
-                           (p/clj-state next-state)))))}
-        obj (assoc-wrappers initial-obj method-wrappers spec)]
-    (let [#?@(:cljs [klass (create-react-class obj)]
-              :clj  [klass obj])
-          klass (assoc-wrappers klass static-wrappers spec)
+(defn- create-react-class [methods statics]
+  #?(:clj
+     {:methods methods
+      :statics statics}
+     :cljs
+     (let [set-all! (partial reduce-kv #(doto %1 (gobj/set (name %2) %3)))
+           ctor (doto (fn [props]
+                        (with-this
+                          (.call js/React.Component *this* props)
+                          (gobj/set *this* "state" #js {})))
+                  (goog/inherits js/React.Component))]
+       (set-all! (gobj/get ctor "prototype") methods)
+       (set-all! ctor statics)
+       ctor)))
+
+(def default-methods
+  {:shouldComponentUpdate
+   (fn [next-props next-state]
+     (with-this
+       (or (not= (p/clj-props *this*)
+                 (p/clj-props next-props))
+           (not= (p/clj-state *this*)
+                 (p/clj-state next-state)))))})
+
+(defn create-class [class-spec]
+  (let [spec (assoc class-spec :lajter.query/keys (query-keys class-spec))
+        methods (into default-methods (wrap-spec method-wrappers spec))
+        statics (wrap-spec static-wrappers spec)]
+    (let [klass (create-react-class methods statics)
+          ;; TODO: Un hardcode this.
           #?@(:cljs [klass (doto klass
                              (specify!
                                p/ILajterClass
