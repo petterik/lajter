@@ -1,4 +1,5 @@
-(ns lajter.git)
+(ns lajter.git
+  (:refer-clojure :exclude [read]))
 
 (defn blob [[file data]]
   {:git/type      :git.type/blob
@@ -17,8 +18,12 @@
    :git.ref/pointer pointer})
 
 (defprotocol IGitClient
-  (checkout [this sha])
+  ;; GitIndex
   (add [this file data])
+  (read [this file])
+  (change [this file f])
+
+  (checkout [this sha])
   (commit [this])
   (branch [this branch-name])
   (delete-branch [this branch-name])
@@ -75,6 +80,9 @@
   (delete-branch [this branch-name]
     (update this :git delete-branch branch-name))
 
+  (read [_ file]
+    (read git file))
+
   ;; Cannot modify the current ref
   (squash-history-after [this sha]
     (throw (ex-info "Cannot call \"squash-history-after\" when in headless git."
@@ -82,6 +90,9 @@
   (add [this file data]
     (throw (ex-info "Cannot call \"add\" when in headless git."
                     {:file file :data data})))
+  (change [this file f]
+    (throw (ex-info "Cannot call \"change\" when in headless git."
+                    {:file file :f f})))
   (commit [this]
     (throw (ex-info "Cannot call \"commit\" when in headless git." {})))
   (cherry-pick [this sha]
@@ -106,6 +117,18 @@
                          :refs       (keys (:refs this))})))))
   (add [this file data]
     (update this :index assoc file data))
+  (read [this file]
+    (or
+      ;; Check the index first.
+      (when-let [[_ v] (find (:index this) file)] v)
+      ;; Check all commits
+      (->> (map :git.commit/blobs (commit-seq this (head-sha this)))
+           (some (fn [blobs]
+                   (when-let [[_ v] (find blobs file)]
+                     (:git.blob/data v)))))))
+  (change [this file f]
+    (add this file (f (read this file))))
+
   (commit [this]
     (if-let [index (not-empty (:index this))]
       (let [blobs (into {}
@@ -128,10 +151,12 @@
                      (add git file data))
                    this)
            (commit))
-      (throw (ex-info (str "Unable to cherry-pick " sha
-                           ". Commit could not be resolved.")
-                      {:sha sha
-                       :head (head-ref this)}))))
+      (if-some [ref (resolve-ref this sha)]
+        (cherry-pick this (:git.ref/pointer ref))
+        (throw (ex-info (str "Unable to cherry-pick " sha
+                             ". Commit could not be resolved.")
+                        {:sha  sha
+                         :head (head-ref this)})))))
 
   (-log [this latest-sha earliest-sha]
     (let [latest-sha (or latest-sha (head-sha this))
@@ -227,5 +252,18 @@
       (cherry-pick 3)
       (cherry-pick 3)
       (log))
+
+  ;; Index tests
+  (-> g
+      (add :foo 1)
+      (commit)
+      (add :bar 2)
+      (commit)
+      (checkout 0)
+      (branch "nr1")
+      (add :bar 3)
+      (commit)
+      (change :bar inc)
+      (checkout "master"))
 
   )
