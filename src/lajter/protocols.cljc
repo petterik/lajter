@@ -5,8 +5,9 @@
   (react-class [this component-spec])
   (schedule-render! [this])
   (schedule-sends! [this])
-  (queue-sends! [this remote-target query])
-  (send! [this]))
+  (queue-sends! [this tx-request])
+  (send! [this])
+  (merge! [this tx-response]))
 
 (defprotocol IHasReconciler
   (get-reconciler [this]))

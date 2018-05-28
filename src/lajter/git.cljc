@@ -21,7 +21,6 @@
   ;; GitIndex
   (add [this file data])
   (read [this file])
-  (change [this file f])
 
   (checkout [this sha])
   (commit [this])
@@ -32,14 +31,13 @@
   (-log [this latest earliest]))
 
 (defn resolve-ref [git r]
-  (if (map? r)
-    r
-    (get-in git [:refs r])))
+  (let [ref-name (cond-> r (map? r) :git.ref/name)]
+    (if (and (map? r) (= "headless" ref-name))
+      r
+      (get-in git [:refs ref-name]))))
 
 (defn resolve-commit [git c]
-  (if (map? c)
-    c
-    (get-in git [:commits c])))
+  (get-in git [:commits (cond-> c (map? c) :git.commit/sha)]))
 
 (defn resolve-sha [git x]
   (when (some? x)
@@ -90,9 +88,6 @@
   (add [this file data]
     (throw (ex-info "Cannot call \"add\" when in headless git."
                     {:file file :data data})))
-  (change [this file f]
-    (throw (ex-info "Cannot call \"change\" when in headless git."
-                    {:file file :f f})))
   (commit [this]
     (throw (ex-info "Cannot call \"commit\" when in headless git." {})))
   (cherry-pick [this sha]
@@ -126,8 +121,6 @@
            (some (fn [blobs]
                    (when-let [[_ v] (find blobs file)]
                      (:git.blob/data v)))))))
-  (change [this file f]
-    (add this file (f (read this file))))
 
   (commit [this]
     (if-let [index (not-empty (:index this))]
@@ -207,30 +200,56 @@
 (defn log [git & [latest earliest]]
   (-log git (or latest (head-sha git)) earliest))
 
+(defn change [git file f & args]
+  (add git file (apply f (read git file) args)))
+
+(defn head-commit [git]
+  (first (log git)))
+
+(defn some-commit [git file data]
+  (some (fn [commit]
+          (when (= data (get-in commit [:git.commit/blobs file :git.blob/data]))
+            commit))
+        (log git)))
+
+(defn parent [git commit]
+  (second (commit-seq git commit)))
+
+(defn add-all [git m]
+  (reduce-kv add git m))
+
 (defn git-client []
   (-> (map->GitClient {:next-id 0
                        :refs {"master" (reference "master" nil)}
                        :head "master"})))
+
+(defn content [commit]
+  (into {}
+        (comp (map val)
+              (juxt :git.blob/file :git.blob/data))
+        (:git.commit/blobs commit)))
 
 (comment
   (def g (git-client))
   (delete-branch (branch g "foo") "foo")
   (= g (delete-branch (branch g "foo") "foo"))
 
-  (-> g
-      (add :foo "bar")
-      (commit)
-      (add :foo "xyz")
-      (add :bar "max")
-      (commit)
-      (add :foo "rawr")
-      (commit))
 
-  (def g2 *1)
+
+  (def g2 (-> g
+              (add :foo "bar")
+              (commit)
+              (add :foo "xyz")
+              (add :bar "max")
+              (commit)
+              (add :foo "rawr")
+              (commit)))
 
   (= (log g2) (log g2 2))
 
   (commit (checkout g2 1))
+
+  (parent g2 (some-commit g2 :foo "rawr"))
 
   (= 1
      (-> g2

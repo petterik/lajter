@@ -61,3 +61,6 @@
 
 (deftest gc-test
   )
+(comment
+  (def g *1)
+  (def commit-id 0))

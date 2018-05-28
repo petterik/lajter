@@ -4,6 +4,7 @@
     [lajter.logger :refer [log]]
     [lajter.protocols :as p]
     [lajter.history :as history]
+    [lajter.git :as git]
     [lajt.parser]
     [lajt.read]
     [clojure.set :as set]
@@ -81,21 +82,53 @@
 (defn transact! [x query]
   (log " getting reconciler from : " x)
   (let [reconciler (p/get-reconciler x)
-        {:keys [history parser remotes state] :as env} (to-env reconciler)
-        #?@(:cljs [history-id (random-uuid)] :clj
-                  [history-id (java.util.UUID/randomUUID)])
+        {:keys [history git-atom parser remotes state] :as env} (to-env reconciler)
+        #?@(:cljs [tx-id (str (random-uuid))] :clj
+                  [tx-id (str (java.util.UUID/randomUUID))])
+        db-before-tx (deref state)
         _ (when (some? history)
-            (history/add! history history-id (deref state)))
+            (history/add! history tx-id (deref state)))
         ;; Perform mutations
-        local-parse (parser (assoc env ::history-id history-id)
+        local-parse (parser (assoc env ::history-id tx-id)
                             query
                             nil)
         remote-parses (into {}
                             (map (juxt identity #(parser env query %)))
-                            remotes)]
-    (doseq [[target remote-query] remote-parses]
-      (p/queue-sends! reconciler target remote-query))
+                            remotes)
+        tx-data {:db-before db-before-tx
+                 :db-after  (deref state)
+                 :tx-id     tx-id
+                 :tx-type  :transact
+                 :query     query
+                 :remote-queries remote-parses}]
+    (when (some? git-atom)
+      (swap! git-atom #(-> % (git/add-all tx-data) (git/commit))))
+    (p/queue-sends! reconciler tx-data)
     (schedule-sends! reconciler)))
+
+(defn replay-commits [reconciler git commits]
+  (comment
+    ;; TODO: THIS WILL ALL GO AWAY WHEN THE LAYERS STUFF IS DONE.(?)
+    (reduce (fn [git commit]
+              (let [{:keys [db-after tx-type query value parser]} (git/content commit)
+                    env (assoc (to-env reconciler) :state (atom db-after))
+                    #?@(:cljs [tx-id (str (random-uuid))] :clj
+                              [tx-id (str (java.util.UUID/randomUUID))])
+                    ret (condp = tx-type
+                          :transact (parser (assoc env ::history-id tx-id) query)
+                          :merge (comment
+                                   ;; Do the same thing we did at merge.
+                                   ;; We need to unify these stuff.
+                                   ;; Build a transaction log that gets executed
+                                   ;; and modified (when we need to adjust optimistic
+                                   ;; mutations).
+                                   ((:merge-fn config) this
+                                     (:db-before tx-response)
+                                     (:response tx-response)
+                                     (dissoc tx-response :db-after))))]
+                ))
+            git
+            commits)))
 
 (defrecord Reconciler [config state]
   p/IHasReconciler
@@ -127,19 +160,77 @@
   (schedule-sends! [this]
     (let [[old _] (swap-vals! state assoc :scheduled-sends? true)]
       (not (:scheduled-sends? old))))
-  (queue-sends! [this remote-target query]
-    (swap! state update-in [:queued-sends remote-target]
-           (fnil into []) query))
+  (queue-sends! [this tx-request]
+    (swap! state update :queued-sends (fnil conj []) tx-request))
   (send! [this]
     (log "SEND!: " @state)
     (let [[old _] (swap-vals! state assoc
-                              :queued-sends {}
+                              :queued-sends []
                               :scheduled-sends? nil)]
-      (doseq [[target query] (:queued-sends old)]
-        (when (seq query)
-          (let [cb (fn [value]
-                     ((:merge-fn config) this value query target))]
-            ((:send-fn config) this cb query target)))))))
+      ;; Take care of batching send-requests.
+      ;; What's the heuristic here? As long as the remotes are the same
+      ;; for every request, batch them together. This would mean that
+      ;; there could be multiple :tx-ids in the response.
+      ;; Which means that we shouldn't batch requests when there are mutations.
+      ;; It gets too tricky...?
+
+      ;; Take care of getting responses from all targets of a query
+      ;; calling merge.
+      (doseq [{:keys [remote-queries] :as tx-request} (:queued-sends old)]
+        (doseq [[target query] remote-queries]
+          (when (seq query)
+            (let [cb (fn [value]
+                       (p/merge! this (assoc tx-request :response value)))]
+              ((:send-fn config) this cb query target)))))))
+  (merge! [this tx-response]
+    (comment
+      ;; THIS GIT STUFF SHOULD GO AWAY
+      (let [git @(:git-atom config)
+           head (git/head-commit git)
+           tx-id (:tx-id tx-response)
+           tx-commit (git/some-commit git :tx-id tx-id)
+           before-tx (git/parent git tx-commit)
+           git (-> git
+                   (git/checkout (:git.commit/sha before-tx))
+                   (git/branch tx-id))
+           merged-db ((:merge-fn config) this
+                       (:db-before tx-response)
+                       (:response tx-response)
+                       (dissoc tx-response :db-after))
+           ;; TODO: Run local query with the merged db?
+           ;; We've got the whole query. Run it in such a way that if the
+           ;; mutation has any of the remotes, it's not executed.
+           git (-> git
+                   (git/add-all {:db-before (:db-before tx-response)
+                                 :db-after  merged-db
+                                 :tx-id     tx-id
+                                 :tx-type   :merge
+                                 :value     (:response tx-response)
+                                 :query     (:query tx-response)})
+                   (git/commit))
+           ;; TODO: Replay all actions after the optimistic mutation.
+           commits-before-optimistic (-> git
+                                         (git/checkout head)
+                                         (git/log nil tx-commit)
+                                         (butlast))
+           git (replay-commits this git commits-before-optimistic)
+           ;; TODO: Reset "master" to be this new branch.
+           ]
+       ;; TODO: Optimize for when there were no remote mutations
+       ;; We don't need to do this git dance when that's the case.
+       ;; TODO: Reset the app-state to be the new db.
+       ))
+    (reset! (:state config)
+            ((:merge-fn config) this
+              (:db-before tx-response)
+              (:response tx-response)
+              (dissoc tx-response :db-after)))))
+;; Got remote response for optimistic mutation (1).
+;; Checkout commit before optimistic mutation (0).
+;; Branch.
+;; Merge the response with db at that commit (0).
+;; Replay all actions after the optimistic mutation (1), which is: [2 and 3].
+;; Reset "master" to be this new branch.
 
 (defn mount [{:as   config}]
   (let [parser (lajt.parser/parser
@@ -175,10 +266,8 @@
                                                    query)]
                           (cb remote-parse))
                        2000)))
-        merge-fn (fn [reconciler value query target]
-                   (swap! (get-in reconciler [:config :state])
-                          merge
-                          value))
+        merge-fn (fn [reconciler db value tx-info]
+                   (merge db value))
         r (->Reconciler (assoc config :parser parser
                                       :send-fn send-fn
                                       :merge-fn merge-fn)
