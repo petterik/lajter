@@ -49,6 +49,11 @@
 (defn get-root-query [reconciler]
   (get-query (get-root reconciler)))
 
+(defn query-keys [query]
+  (into #{}
+        (map :lajt.parser/key)
+        (lajt.parser/query->parsed-query query)))
+
 ;; Make this trigger. We need a main.
 
 ;; TODO: Replace with component's protocol.
