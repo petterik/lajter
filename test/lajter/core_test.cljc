@@ -133,15 +133,6 @@
   (prop/for-all [query (gen-query)]
     (s/valid? ::parser/query query)))
 
-(def parser (lajt.parser/parser
-              {:read   (fn [env k p]
-                         (if (:target env)
-                           (= "remote" (namespace k))
-                           (get @(:state env) k)))
-               :mutate (fn [env k p]
-                         (when (:target env)
-                           (= "remote" (namespace k))))}))
-
 (defn transaction-layer-test-call* [m]
   (transaction-layer {:parser  parser
                       :remotes [:remote]}
@@ -173,24 +164,16 @@
 
 
 (deftest transaction-layer-test-by-example
-  (are [m] (= (transaction-layer-test-call* m)
-              (transaction-layer-test-relation* m))
-    '{:remote-mutates []
-      :remote-reads []
-      :local-mutates []
-      :local-reads []}
-    '{:remote-mutates []
-      :remote-reads [(:remote/A {})]
-      :local-mutates []
-      :local-reads []}
-    '{:remote-mutates [(remote/B) (remote/B)]
-      :remote-reads []
-      :local-mutates []
-      :local-reads []}
-    '{:remote-mutates []
-      :remote-reads [:remote/? :remote/?]
-      :local-mutates []
-      :local-reads []}))
+  (let [base {:remote-mutates []
+              :remote-reads []
+              :local-mutates []
+              :local-reads []}]
+    (are [m] (= (transaction-layer-test-call* m)
+               (transaction-layer-test-relation* m))
+     base
+     (assoc base :remote-reads '[(:remote/A {})])
+     (assoc base :remote-mutates '[(remote/B) (remote/B)])
+     (assoc base :remote-reads [:remote/? :remote/?]))))
 
 (comment
 
