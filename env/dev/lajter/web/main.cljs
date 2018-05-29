@@ -27,6 +27,13 @@
                      (dom/button #js{:onClick
                                      #(la/transact! this '[(foo/pop)])}
                                  (dom/span nil "Remove from foo"))
+                     (dom/button #js{:onClick
+                                     #(la/transact! this `[(bar/assoc ~{:k (rand-int 100)
+                                                                        :v (rand-int 100)})])}
+                                 (dom/span nil "Assoc to bar"))
+                     (dom/button #js{:onClick
+                                     #(la/transact! this `[(bar/dissoc)])}
+                                 (dom/span nil "Dissoc from bar"))
                      (dom/button #js {:onClick (la/get-computed this :update-parent)}
                                  (dom/span nil "Update parent state"))))})
 
@@ -51,7 +58,7 @@
                         (la/render-child this ComponentB)))
    :getDerivedStateFromProps
                     (fn [_ props state]
-                      {:initial-state (get-in props [:bar :a])
+                      {:initial-state (-> props :bar first)
                        :counter       (-> props :foo last)})})
 
 (defn ^:after-load runit! []

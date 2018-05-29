@@ -89,7 +89,7 @@
 (defprotocol ILayered
   (add-layer! [this layer])
   (replace-layer! [this tx-id with-layer])
-  (squash-layers-up-to! [this tx-id]))
+  (squash-local-layers! [this]))
 
 (defn transact! [x query]
   (let [reconciler (p/get-reconciler x)
@@ -99,8 +99,9 @@
     (log "TRANSACT: " query)
     (log "Adding layer: " layer)
     (add-layer! reconciler layer)
-    (when (seq (:layer.remote/targets layer))
-      (schedule-sends! reconciler))
+    (if (seq (:layer.remote/targets layer))
+      (schedule-sends! reconciler)
+      (squash-local-layers! reconciler))
     (schedule-render! reconciler)))
 
 #_(defn transact! [x query]
@@ -211,13 +212,13 @@
     (swap! state update :layers (fnil conj []) layer))
   (replace-layer! [this layer-id with-layer]
     (swap! state update :layers replace-layer layer-id with-layer))
-  (squash-layers-up-to! [this layer-id]
+  (squash-local-layers! [this]
     (let [layers (:layers @state)
-          =layer? (comp #{layer-id} :layer/id)
-          up-to (->> layers (take-until =layer?))
-          after (->> layers (drop-while (complement =layer?)) (drop 1))]
-      (swap! (:state config) #(db-with-layers this % up-to))
-      (swap! state assoc :layers (vec after))))
+          remote-layer? (comp seq :layer.remote/targets)
+          [local-layers rest-of-layers] (split-with (complement remote-layer?) layers)]
+      (when (seq local-layers)
+        (swap! (:state config) #(db-with-layers this % local-layers))
+        (swap! state assoc :layers (vec rest-of-layers)))))
 
   p/IReconciler
   (react-class [this component-spec]
@@ -273,8 +274,8 @@
           (let [cb (fn [value]
                      (replace-layer! this
                                      (:layer/id remote-layer)
-                                     (merge remote-layer (layer/->merge-layer value)))
-                     (squash-layers-up-to! this (:layer/id remote-layer))
+                                     (layer/->merge-layer remote-layer value))
+                     (squash-local-layers! this)
                      (schedule-render! this)
                      (schedule-sends! this))]
             ((:send-fn config) this cb query target))))))
@@ -341,14 +342,17 @@
                   :mutate
                   (fn [env k p]
                     (if (:target env)
-                      [true (keyword (namespace k))]
+                      (when (= "foo" (namespace k))
+                        [true :foo])
                       (condp = k
                         'foo/conj
                         (swap! (:state env) update :foo conj (:x p))
                         'foo/pop
                         (swap! (:state env) update :foo pop)
-                        'bar/add
-                        (swap! (:state env) update :bar assoc (:k p) (:v p)))))})
+                        'bar/assoc
+                        (swap! (:state env) update :bar assoc (:k p) (:v p))
+                        'bar/dissoc
+                        (swap! (:state env) update :bar #(dissoc % (first (keys %)))))))})
         remote-state (atom @(:state config))
         send-fn (fn [reconciler cb query target]
                   (log "would send query: " query

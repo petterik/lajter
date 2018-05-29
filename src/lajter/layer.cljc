@@ -26,8 +26,13 @@
                                  :layer.remote/keys
                                  :layer.remote/targets]))
 
-(defn ->merge-layer [value]
-  {:layer.merge/value value})
+(defn ->merge-layer [layer value]
+  (merge {:layer.merge/value value}
+         (dissoc layer
+                 :layer.remote/targets
+                 :layer.remote/mutates
+                 :layer.remote/keys
+                 :layer.remote/reads)))
 
 (defn- mutation-key? [k]
   (s/valid? ::parser/mutation-id k))
