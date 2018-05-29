@@ -2,6 +2,7 @@
   (:require
     [clojure.test]
     [lajter.core-test]
+    [lajter.layer-test]
     [lajter.git_test]
     [expound.alpha]
     [clojure.spec.alpha :as s]
