@@ -88,7 +88,8 @@
 
 (defprotocol ILayered
   (add-layer! [this layer])
-  (replace-layer! [this tx-id with-layer]))
+  (replace-layer! [this tx-id with-layer])
+  (squash-layers-up-to! [this tx-id]))
 
 (defn transact! [x query]
   (let [reconciler (p/get-reconciler x)
@@ -190,6 +191,12 @@
                           :with-layer with-layer
                           :layers     layers}))))))
 
+(defn take-until [pred coll]
+  (transduce (halt-when pred (fn [res halt] (conj res halt)))
+             conj
+             []
+             coll))
+
 (defrecord Reconciler [config state]
   p/IHasReconciler
   (get-reconciler [this] this)
@@ -204,6 +211,13 @@
     (swap! state update :layers (fnil conj []) layer))
   (replace-layer! [this layer-id with-layer]
     (swap! state update :layers replace-layer layer-id with-layer))
+  (squash-layers-up-to! [this layer-id]
+    (let [layers (:layers @state)
+          =layer? (comp #{layer-id} :layer/id)
+          up-to (->> layers (take-until =layer?))
+          after (->> layers (drop-while (complement =layer?)) (drop 1))]
+      (swap! (:state config) #(db-with-layers this % up-to))
+      (swap! state assoc :layers (vec after))))
 
   p/IReconciler
   (react-class [this component-spec]
@@ -239,7 +253,7 @@
                            (eduction
                              (map-indexed vector)
                              (filter (comp seq :layer.remote/targets second))
-                             (remove (comp ::sent? second))
+                             (remove (comp ::in-flight? second))
                              (take 1)
                              layers)))
           [old _] (swap-vals! state
@@ -249,7 +263,7 @@
                                       (assoc :scheduled-sends? nil)
                                       (cond-> (some? remote-layer)
                                               (update-in [:layers idx] assoc
-                                                         ::sent? true))))))
+                                                         ::in-flight? true))))))
           [_ remote-layer] (first-remote (:layers old))]
       (log "Remote-layer: " remote-layer)
 
@@ -257,11 +271,10 @@
         (let [query (into (get-in remote-layer [:layer.remote/mutates target] [])
                           (get-in remote-layer [:layer.remote/reads target]))]
           (let [cb (fn [value]
-                     (replace-layer!
-                       this
-                       (:layer/id remote-layer)
-                       (merge remote-layer (-> (layer/->merge-layer value)
-                                               (assoc ::sent? true))))
+                     (replace-layer! this
+                                     (:layer/id remote-layer)
+                                     (merge remote-layer (layer/->merge-layer value)))
+                     (squash-layers-up-to! this (:layer/id remote-layer))
                      (schedule-render! this)
                      (schedule-sends! this))]
             ((:send-fn config) this cb query target))))))
