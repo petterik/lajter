@@ -1,6 +1,6 @@
 (ns lajter.layer
   (:require
-    [lajter.core :as la]
+    [lajter.protocols :as p]
     [lajt.parser :as parser]
     [clojure.spec.alpha :as s]))
 
@@ -70,10 +70,18 @@
 
 (defn transaction-layer
   ([reconciler tx]
-   (transaction-layer (:config reconciler) (la/to-env reconciler) tx))
+   (transaction-layer (:config reconciler) (p/to-env reconciler) tx))
   ([config env tx]
    (let [{:keys [parser remotes]} config
          parsed-query (lajt.parser/query->parsed-query tx)
          remote-layer (->remote-layer parser remotes env parsed-query)
          local-layer (->local-layer remote-layer parsed-query)]
-     (merge remote-layer local-layer))))
+     (-> (merge remote-layer local-layer)
+         (assoc :layer/query tx
+                :layer/mutates (into []
+                                     (comp (filter (comp mutation-key? ::parser/key))
+                                           (lajt.parser/parsed-query->query))
+                                     parsed-query))))))
+
+(defn with-id [layer tx-id]
+  (assoc layer :layer/id tx-id))

@@ -1,6 +1,7 @@
 (ns lajter.core
   (:require
     [lajter.react]
+    [lajter.layer :as layer]
     [lajter.logger :refer [log]]
     [lajter.protocols :as p]
     [lajter.history :as history]
@@ -60,9 +61,6 @@
 (defprotocol IStoppable
   (stop! [this]))
 
-(defprotocol IEnvironment
-  (to-env [this]))
-
 (def ^:dynamic *raf*)
 
 #?(:cljs
@@ -84,7 +82,27 @@
     #?(:cljs
        (p/send! reconciler))))
 
+(defn- gen-tx-id! []
+  #?(:cljs (random-uuid)
+     :clj  (java.util.UUID/randomUUID)))
+
+(defprotocol ILayered
+  (add-layer! [this layer])
+  (replace-layer! [this tx-id with-layer]))
+
 (defn transact! [x query]
+  (let [reconciler (p/get-reconciler x)
+        tx-id (gen-tx-id!)
+        layer (-> (layer/transaction-layer reconciler query)
+                  (layer/with-id tx-id))]
+    (log "TRANSACT: " query)
+    (log "Adding layer: " layer)
+    (add-layer! reconciler layer)
+    (when (seq (:layer.remote/targets layer))
+      (schedule-sends! reconciler))
+    (schedule-render! reconciler)))
+
+#_(defn transact! [x query]
   (log " getting reconciler from : " x)
   (let [reconciler (p/get-reconciler x)
         {:keys [history git-atom parser remotes state] :as env} (to-env reconciler)
@@ -135,15 +153,58 @@
             git
             commits)))
 
+(defn- db-with-layers [reconciler db layers]
+  (let [{:keys [parser] :as env} (p/to-env reconciler)
+        mutate-db (fn [db query]
+                    (if (empty? query)
+                      db
+                      (let [state (atom db)]
+                        (parser (assoc env :state state :db db) query)
+                        @state)))
+        merge-db (fn [db to-merge]
+                   ((:merge-fn (:config reconciler)) reconciler db to-merge nil))
+        apply-layer (fn [db layer]
+                      ;; If the layer contains something to merge.
+                      ;; Apply the local mutations then call merge.
+                      (if-let [to-merge (not-empty (:layer.merge/value layer))]
+                        (-> db
+                            (mutate-db (:layer.local/mutates layer))
+                            (merge-db to-merge))
+                        ;; Otherwise, just call all the mutates.
+                        (mutate-db db (:layer/mutates layer))))]
+    (reduce apply-layer db layers)))
+
+(defn replace-layer [layers layer-id with-layer]
+  (doto
+    (into []
+          (map (fn [layer]
+                 (if (= layer-id (:layer/id layer))
+                   with-layer
+                   layer)))
+          layers)
+    (as-> $ (when (= layers $)
+              (throw
+                (ex-info (str "Unable to find layer-id: " layer-id
+                              " in layers.")
+                         {:layer-id   layer-id
+                          :with-layer with-layer
+                          :layers     layers}))))))
+
 (defrecord Reconciler [config state]
   p/IHasReconciler
   (get-reconciler [this] this)
   IStoppable
   (stop! [this]
     (remove-watch (:app-state config) ::reconciler))
-  IEnvironment
+  p/IEnvironment
   (to-env [this]
     (select-keys config [:parser :state :remotes]))
+  ILayered
+  (add-layer! [this layer]
+    (swap! state update :layers (fnil conj []) layer))
+  (replace-layer! [this layer-id with-layer]
+    (swap! state update :layers replace-layer layer-id with-layer))
+
   p/IReconciler
   (react-class [this component-spec]
     (if-let [klass (get (:class-cache @state) component-spec)]
@@ -155,7 +216,13 @@
     (swap! state dissoc :scheduled-render?)
     (let [{:keys [parser root-render target root-component]} config
           root-class (p/react-class this root-component)
-          props (parser (to-env this) (get-query root-class))]
+          db (deref (:state config))
+          layers (:layers @state [])
+          _ (log "layers: " {:layers layers})
+          db (db-with-layers this db layers)
+          _ (log "new db: " db)
+          env (assoc (p/to-env this) :state (atom db) :db db)
+          props (parser env (get-query root-class))]
       (root-render
         (lajter.react/create-instance this root-class props nil)
         target)))
@@ -165,28 +232,39 @@
   (schedule-sends! [this]
     (let [[old _] (swap-vals! state assoc :scheduled-sends? true)]
       (not (:scheduled-sends? old))))
-  (queue-sends! [this tx-request]
-    (swap! state update :queued-sends (fnil conj []) tx-request))
   (send! [this]
     (log "SEND!: " @state)
-    (let [[old _] (swap-vals! state assoc
-                              :queued-sends []
-                              :scheduled-sends? nil)]
-      ;; Take care of batching send-requests.
-      ;; What's the heuristic here? As long as the remotes are the same
-      ;; for every request, batch them together. This would mean that
-      ;; there could be multiple :tx-ids in the response.
-      ;; Which means that we shouldn't batch requests when there are mutations.
-      ;; It gets too tricky...?
+    (let [first-remote (fn [layers]
+                         (first
+                           (eduction
+                             (map-indexed vector)
+                             (filter (comp seq :layer.remote/targets second))
+                             (remove (comp ::sent? second))
+                             (take 1)
+                             layers)))
+          [old _] (swap-vals! state
+                              (fn [state]
+                                (let [[idx remote-layer] (first-remote (:layers state))]
+                                  (-> state
+                                      (assoc :scheduled-sends? nil)
+                                      (cond-> (some? remote-layer)
+                                              (update-in [:layers idx] assoc
+                                                         ::sent? true))))))
+          [_ remote-layer] (first-remote (:layers old))]
+      (log "Remote-layer: " remote-layer)
 
-      ;; Take care of getting responses from all targets of a query
-      ;; calling merge.
-      (doseq [{:keys [remote-queries] :as tx-request} (:queued-sends old)]
-        (doseq [[target query] remote-queries]
-          (when (seq query)
-            (let [cb (fn [value]
-                       (p/merge! this (assoc tx-request :response value)))]
-              ((:send-fn config) this cb query target)))))))
+      (doseq [target (:layer.remote/targets remote-layer)]
+        (let [query (into (get-in remote-layer [:layer.remote/mutates target] [])
+                          (get-in remote-layer [:layer.remote/reads target]))]
+          (let [cb (fn [value]
+                     (replace-layer!
+                       this
+                       (:layer/id remote-layer)
+                       (merge remote-layer (-> (layer/->merge-layer value)
+                                               (assoc ::sent? true))))
+                     (schedule-render! this)
+                     (schedule-sends! this))]
+            ((:send-fn config) this cb query target))))))
   (merge! [this tx-response]
     (comment
       ;; THIS GIT STUFF SHOULD GO AWAY
@@ -253,26 +331,33 @@
                       [true (keyword (namespace k))]
                       (condp = k
                         'foo/conj
-                        (swap! (:state env) update :foo conj (rand-int 100))
+                        (swap! (:state env) update :foo conj (:x p))
                         'foo/pop
                         (swap! (:state env) update :foo pop)
                         'bar/add
-                        (swap! (:state env) update :bar assoc
-                               (rand-int 100)
-                               (rand-int 100)))))})
+                        (swap! (:state env) update :bar assoc (:k p) (:v p)))))})
         remote-state (atom @(:state config))
         send-fn (fn [reconciler cb query target]
                   (log "would send query: " query
                        " to target: " target)
                   #?(:cljs
                      (js/setTimeout
-                       #(let [remote-parse (parser (assoc (to-env reconciler)
-                                                     :state remote-state)
-                                                   query)]
-                          (cb remote-parse))
+                       #(let [remote-parse
+                              (parser (assoc (p/to-env reconciler) :state remote-state)
+                                      (->> query
+                                           (lajt.parser/query->parsed-query)
+                                           (map (fn [{:lajt.parser/keys [key] :as m}]
+                                                  (if (= 'foo/conj key)
+                                                    (update-in m [:lajt.parser/params :x] inc)
+                                                    m)))
+                                           (lajt.parser/parsed-query->query)))]
+                          (cb (into {}
+                                    (remove (comp symbol? key))
+                                    remote-parse)))
                        2000)))
         merge-fn (fn [reconciler db value tx-info]
                    (merge db value))
+
         r (->Reconciler (assoc config :parser parser
                                       :send-fn send-fn
                                       :merge-fn merge-fn)

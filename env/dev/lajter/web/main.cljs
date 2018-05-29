@@ -22,7 +22,7 @@
                                       #(la/update-state! this update :counter (fnil inc 0))}
                                  (dom/span nil "Update counter"))
                      (dom/button #js{:onClick
-                                     #(la/transact! this '[(foo/conj)])}
+                                     #(la/transact! this `[(foo/conj ~{:x (rand-int 100)})])}
                                  (dom/span nil "Add to foo"))
                      (dom/button #js{:onClick
                                      #(la/transact! this '[(foo/pop)])}
@@ -51,7 +51,6 @@
                         (la/render-child this ComponentB)))
    :getDerivedStateFromProps
                     (fn [_ props state]
-                      (log "in derived state. Props: " props)
                       {:initial-state (get-in props [:bar :a])
                        :counter       (-> props :foo last)})})
 

@@ -5,9 +5,11 @@
   (react-class [this component-spec])
   (schedule-render! [this])
   (schedule-sends! [this])
-  (queue-sends! [this tx-request])
   (send! [this])
   (merge! [this tx-response]))
+
+(defprotocol IEnvironment
+  (to-env [this]))
 
 (defprotocol IHasReconciler
   (get-reconciler [this]))
