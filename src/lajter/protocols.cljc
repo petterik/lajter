@@ -5,8 +5,7 @@
   (react-class [this component-spec])
   (schedule-render! [this])
   (schedule-sends! [this])
-  (send! [this])
-  (merge! [this tx-response]))
+  (send! [this]))
 
 (defprotocol IEnvironment
   (to-env [this]))
