@@ -84,66 +84,16 @@
   #?(:cljs (random-uuid)
      :clj  (java.util.UUID/randomUUID)))
 
-(defprotocol ILayered
-  (add-layer! [this layer])
-  (replace-layer! [this tx-id with-layer])
-  (squash-local-layers! [this]))
-
 (defn transact! [x query]
   (let [reconciler (p/get-reconciler x)
         tx-id (gen-tx-id!)
         layer (-> (layer/transaction-layer reconciler query)
                   (layer/with-id tx-id))]
-    (log "TRANSACT: " query)
-    (log "Adding layer: " layer)
-    (add-layer! reconciler layer)
+    (p/add-layer! reconciler layer)
     (if (seq (:layer.remote/targets layer))
       (schedule-sends! reconciler)
-      (squash-local-layers! reconciler))
+      (p/squash-local-layers! reconciler))
     (schedule-render! reconciler)))
-
-(defn- db-with-layers [reconciler db layers]
-  (let [{:keys [parser] :as env} (p/to-env reconciler)
-        mutate-db (fn [db query]
-                    (if (empty? query)
-                      db
-                      (let [state (atom db)]
-                        (parser (assoc env :state state :db db) query)
-                        @state)))
-        merge-db (fn [db to-merge]
-                   ((:merge-fn (:config reconciler)) reconciler db to-merge nil))
-        apply-layer (fn [db layer]
-                      ;; If the layer contains something to merge.
-                      ;; Apply the local mutations then call merge.
-                      (if-let [to-merge (not-empty (:layer.merge/value layer))]
-                        (-> db
-                            (mutate-db (:layer.local/mutates layer))
-                            (merge-db to-merge))
-                        ;; Otherwise, just call all the mutates.
-                        (mutate-db db (:layer/mutates layer))))]
-    (reduce apply-layer db layers)))
-
-(defn replace-layer [layers layer-id with-layer]
-  (doto
-    (into []
-          (map (fn [layer]
-                 (if (= layer-id (:layer/id layer))
-                   with-layer
-                   layer)))
-          layers)
-    (as-> $ (when (= layers $)
-              (throw
-                (ex-info (str "Unable to find layer-id: " layer-id
-                              " in layers.")
-                         {:layer-id   layer-id
-                          :with-layer with-layer
-                          :layers     layers}))))))
-
-(defn take-until [pred coll]
-  (transduce (halt-when pred (fn [res halt] (conj res halt)))
-             conj
-             []
-             coll))
 
 (defrecord Reconciler [config state]
   p/IHasReconciler
@@ -154,18 +104,16 @@
   p/IEnvironment
   (to-env [this]
     (select-keys config [:parser :state :remotes]))
-  ILayered
+  p/ILayers
   (add-layer! [this layer]
-    (swap! state update :layers (fnil conj []) layer))
+    (swap! state update :layers layer/add-layer layer))
   (replace-layer! [this layer-id with-layer]
-    (swap! state update :layers replace-layer layer-id with-layer))
+    (swap! state update :layers layer/replace-layer layer-id with-layer))
   (squash-local-layers! [this]
-    (let [layers (:layers @state)
-          remote-layer? (comp seq :layer.remote/targets)
-          [local-layers rest-of-layers] (split-with (complement remote-layer?) layers)]
-      (when (seq local-layers)
-        (swap! (:state config) #(db-with-layers this % local-layers))
-        (swap! state assoc :layers (vec rest-of-layers)))))
+    (let [layers (:layers @state)]
+      (when-let [local-layers (seq (layer/leading-local-layers layers))]
+        (swap! (:state config) #(layer/db-with-layers this % local-layers))
+        (swap! state update :layers layer/drop-layers local-layers))))
 
   p/IReconciler
   (react-class [this component-spec]
@@ -181,8 +129,7 @@
           db (deref (:state config))
           layers (:layers @state [])
           _ (log "layers: " {:layers layers})
-          db (db-with-layers this db layers)
-          _ (log "new db: " db)
+          db (layer/db-with-layers this db layers)
           env (assoc (p/to-env this) :state (atom db) :db db)
           props (parser env (get-query root-class))]
       (root-render
@@ -196,33 +143,19 @@
       (not (:scheduled-sends? old))))
   (send! [this]
     (log "SEND!: " @state)
-    (let [first-remote (fn [layers]
-                         (first
-                           (eduction
-                             (map-indexed vector)
-                             (filter (comp seq :layer.remote/targets second))
-                             (remove (comp ::in-flight? second))
-                             (take 1)
-                             layers)))
-          [old _] (swap-vals! state
-                              (fn [state]
-                                (let [[idx remote-layer] (first-remote (:layers state))]
-                                  (-> state
-                                      (assoc :scheduled-sends? nil)
-                                      (cond-> (some? remote-layer)
-                                              (update-in [:layers idx] assoc
-                                                         ::in-flight? true))))))
-          [_ remote-layer] (first-remote (:layers old))]
+    (let [remote-layer (layer/first-remote-unsent (:layers @state))]
+      (swap! state #(-> (assoc % :scheduled-sends? nil)
+                        (cond-> (some? remote-layer)
+                                (update :layers layer/mark-sent-layer remote-layer))))
       (log "Remote-layer: " remote-layer)
-
       (doseq [target (:layer.remote/targets remote-layer)]
         (let [query (into (get-in remote-layer [:layer.remote/mutates target] [])
                           (get-in remote-layer [:layer.remote/reads target]))]
           (let [cb (fn [value]
-                     (replace-layer! this
+                     (p/replace-layer! this
                                      (:layer/id remote-layer)
                                      (layer/->merge-layer remote-layer value))
-                     (squash-local-layers! this)
+                     (p/squash-local-layers! this)
                      (schedule-render! this)
                      (schedule-sends! this))]
             ((:send-fn config) this cb query target)))))))

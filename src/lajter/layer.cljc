@@ -90,3 +90,57 @@
 
 (defn with-id [layer tx-id]
   (assoc layer :layer/id tx-id))
+
+(defn db-with-layers [reconciler db layers]
+  (let [{:keys [parser] :as env} (p/to-env reconciler)
+        mutate-db (fn [db query]
+                    (if (empty? query)
+                      db
+                      (let [state (atom db)]
+                        (parser (assoc env :state state :db db) query)
+                        @state)))
+        merge-db (fn [db to-merge]
+                   ((:merge-fn (:config reconciler)) reconciler db to-merge nil))
+        apply-layer (fn [db layer]
+                      ;; If the layer contains something to merge.
+                      ;; Apply the local mutations then call merge.
+                      (if-let [to-merge (not-empty (:layer.merge/value layer))]
+                        (-> db
+                            (mutate-db (:layer.local/mutates layer))
+                            (merge-db to-merge))
+                        ;; Otherwise, just call all the mutates.
+                        (mutate-db db (:layer/mutates layer))))]
+    (reduce apply-layer db layers)))
+
+;; Layer collection manipulations
+
+(defn- update-layer [layers id f]
+  (into []
+        (map #(if (= id (:layer/id %)) (f %) %))
+        layers))
+
+(defn replace-layer [layers layer-id with-layer]
+  (update-layer layers layer-id (constantly with-layer)))
+
+(defn add-layer [layers layer]
+  (conj (or layers []) layer))
+
+(def remote-layer? (comp seq :layer.remote/targets))
+(def local-layer? (comp empty? :layer.remote/targets))
+
+(defn leading-local-layers [layers]
+  (take-while local-layer? layers))
+
+(defn drop-layers [layers layers-to-drop]
+  (into [] (drop (count layers-to-drop)) layers))
+
+(defn first-remote-unsent [layers]
+  (first
+    (eduction
+      (filter remote-layer?)
+      (remove ::sent)
+      (take 1)
+      layers)))
+
+(defn mark-sent-layer [layers layer]
+  (update-layer layers (:layer/id layer) #(assoc % ::sent true)))

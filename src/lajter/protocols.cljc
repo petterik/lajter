@@ -22,3 +22,8 @@
 
 (defprotocol ILajterClass
   (spec-map [this]))
+
+(defprotocol ILayers
+  (add-layer! [this layer])
+  (replace-layer! [this tx-id with-layer])
+  (squash-local-layers! [this]))
