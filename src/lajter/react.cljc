@@ -33,6 +33,8 @@
                  (gobj/get "lajter$clj-state")))
        (clj-computed [this]
          (get-js-prop this "lajter$clj-computed"))
+       (clj-routes [this]
+         (get-js-prop this "lajter$clj-routes"))
        (update-clj-state! [this f]
          (.setState this (fn [state]
                            #js {:lajter$clj-state
@@ -155,12 +157,11 @@
 (defn- query-keys
   "Returns the keys of the component's query."
   [spec]
-  (let [ks (atom #{})
-        parser (lajt.parser/parser {:read (fn [_ k _]
-                                            (swap! ks conj k)
-                                            nil)})]
-    (parser {} (:lajter/query spec))
-    @ks))
+  (into #{}
+        (comp
+          (lajt.parser/query->parsed-query)
+          (map :lajt.parser/key))
+        (:lajter/query spec)))
 
 (defn- create-react-class [methods statics]
   #?(:clj
@@ -181,7 +182,9 @@
   {:shouldComponentUpdate
    (fn [next-props next-state]
      (with-this
-       (or (not= (p/clj-props *this*)
+       (or (not= (p/clj-routes *this*)
+                 (p/clj-routes next-props))
+           (not= (p/clj-props *this*)
                  (p/clj-props next-props))
            (not= (p/clj-state *this*)
                  (p/clj-state next-state)))))})
@@ -195,14 +198,18 @@
           #?@(:cljs [klass (doto klass
                              (specify!
                                p/ILajterClass
-                               (spec-map [this] spec)))])]
+                               (spec-map [_] spec)))])]
       klass)))
 
-(defn create-instance [reconciler klass props computed]
+(defn create-instance
+  [reconciler klass props computed routes]
   (let [clj-props (select-keys props (:lajter.query/keys (p/spec-map klass)))]
     #?(:cljs
-       (react/createElement klass #js {:lajter$clj-props     clj-props
-                                       :lajter$raw-clj-props props
-                                       :lajter$reconciler    reconciler
-                                       :lajter$react-class   klass
-                                       :lajter$clj-computed  computed}))))
+       (react/createElement
+         klass
+         #js {:lajter$clj-props     clj-props
+              :lajter$raw-clj-props props
+              :lajter$clj-routes    routes
+              :lajter$reconciler    reconciler
+              :lajter$react-class   klass
+              :lajter$clj-computed  computed}))))

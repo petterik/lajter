@@ -98,7 +98,6 @@
       (= (transaction-layer-test-call* query)
          (transaction-layer-test-relation* query m)))))
 
-
 (deftest transaction-layer-test-by-example
   (let [base {:remote-mutates []
               :remote-reads []

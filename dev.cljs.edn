@@ -1,2 +1,3 @@
-^{:watch-dirs ["env/dev" "src" "test"]}
+^{:watch-dirs ["env/dev" "src" "test"]
+  :open-url false}
 {:main "lajter.web.main"}

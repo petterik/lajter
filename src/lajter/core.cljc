@@ -35,18 +35,34 @@
   (and (instance? p/IReactElement x)
        (some? (p/clj-props x))))
 
+(defn route->component [reconciler route-data]
+  (get (:lajter.routing/choices route-data)
+       (p/select-route reconciler route-data)))
+
 (defn get-query [x]
-  (let [spec (cond-> x (not (map? x)) p/spec-map)]
+  (:lajter/query (cond-> x (not (map? x)) p/spec-map)))
+
+(defn get-full-query [reconciler x]
+  (let [spec (cond-> x (not (map? x)) (p/spec-map))
+        routing (when-let [routing (:lajter/routing spec)]
+                  (eduction
+                    (map (fn [[route choices]]
+                           (route->component
+                             reconciler
+                             {:lajter.routing/route   route
+                              :lajter.routing/choices choices})))
+                    routing))]
     (not-empty
       (into (:lajter/query spec [])
-            (mapcat get-query)
-            (:lajter/children spec)))))
+            (mapcat #(get-full-query reconciler %))
+            (concat (:lajter/children spec)
+                    routing)))))
 
 (defn get-root [reconciler]
   (get-in reconciler [:config :root-component]))
 
 (defn get-root-query [reconciler]
-  (get-query (get-root reconciler)))
+  (get-full-query reconciler (get-root reconciler)))
 
 (defn query-keys [query]
   (into #{}
@@ -95,6 +111,17 @@
       (p/squash-local-layers! reconciler))
     (schedule-render! reconciler)))
 
+(defn routes-for-component [reconciler x]
+  (let [spec (cond-> x (not (map? x)) (p/spec-map))
+        select-route (fn [[route choices]]
+                       (p/select-route
+                         reconciler
+                         {:lajter.routing/route   route
+                          :lajter.routing/choices choices}))]
+    (some->> (:lajter/routing spec)
+             (not-empty)
+             (into {} (map (juxt key select-route))))))
+
 (defrecord Reconciler [config state]
   p/IHasReconciler
   (get-reconciler [this] this)
@@ -103,7 +130,8 @@
     (remove-watch (:app-state config) ::reconciler))
   p/IEnvironment
   (to-env [this]
-    (select-keys config [:parser :state :remotes]))
+    (-> (select-keys config [:parser :state :remotes])
+        (assoc :reconciler this)))
   p/ILayers
   (add-layer! [this layer]
     (swap! state update :layers layer/add-layer layer))
@@ -131,9 +159,14 @@
           _ (log "layers: " {:layers layers})
           db (layer/db-with-layers this db layers)
           env (assoc (p/to-env this) :state (atom db) :db db)
-          props (parser env (get-query root-class))]
+          props (parser env (get-full-query this root-class))
+          routes (routes-for-component this root-component)]
       (root-render
-        (lajter.react/create-instance this root-class props nil)
+        (lajter.react/create-instance this
+                                      root-class
+                                      props
+                                      nil
+                                      routes)
         target)))
   (schedule-render! [this]
     (let [[old _] (swap-vals! state assoc :scheduled-render? true)]
@@ -158,7 +191,11 @@
                      (p/squash-local-layers! this)
                      (schedule-render! this)
                      (schedule-sends! this))]
-            ((:send-fn config) this cb query target)))))))
+            ((:send-fn config) this cb query target))))))
+  (select-route [this route-data]
+    ((:route-fn config)
+      (p/to-env this)
+      route-data)))
 
 (defn mount [{:as   config}]
   (let [parser (lajt.parser/parser
@@ -176,6 +213,8 @@
                       (when (= "foo" (namespace k))
                         [true :foo])
                       (condp = k
+                        'route/set
+                        (swap! (:state env) update :routing merge p)
                         'foo/conj
                         (swap! (:state env) update :foo conj (:x p))
                         'foo/pop
@@ -205,10 +244,15 @@
                        2000)))
         merge-fn (fn [reconciler db value tx-info]
                    (merge db value))
+        route-fn (fn [env {:lajter.routing/keys [route choices]}]
+                   (log "Selecting route for: " route " choices: " choices)
+                   (log "State: " @(:state env))
+                   (get-in @(:state env) [:routing route]))
 
         r (->Reconciler (assoc config :parser parser
                                       :send-fn send-fn
-                                      :merge-fn merge-fn)
+                                      :merge-fn merge-fn
+                                      :route-fn route-fn)
                         (atom {}))]
     (log "state: " (:state config))
     (add-watch (:state config) ::reconciler
@@ -216,17 +260,33 @@
                  (schedule-render! r)))
     r))
 
+(defn- get-child-computed [this child-component]
+  (some-> (p/spec-map this)
+                   :lajter/computed
+                   (get child-component)
+                   (as-> f (f this))))
+
 (defn render-child [this child-component]
-  (let [reconciler (p/get-reconciler this)
-        computed (some-> (p/spec-map this)
-                         :lajter/computed
-                         (get child-component)
-                         (as-> f (f this)))]
+  (let [reconciler (p/get-reconciler this)]
     (lajter.react/create-instance
       reconciler
       (p/react-class reconciler child-component)
       (p/raw-clj-props this)
-      computed)))
+      (get-child-computed this child-component)
+      (routes-for-component reconciler child-component))))
+
+(defn render-route [this route]
+  ;; TODO: Debug this.
+  ;; GET the stuff to render.
+  (let [selected-route (get (p/clj-routes this) route)
+        child-component (-> (p/spec-map this)
+                            (:lajter/routing)
+                            (get-in [route selected-route]))]
+    (if (some? child-component)
+      (render-child this child-component)
+      (log "WARN: No child component for route: " route
+           " selected-route: " selected-route
+           " routing: " (:lajter/routing (p/spec-map this))))))
 
 (defonce reconciler-atom (atom nil))
 (defn redef-reconciler [config]

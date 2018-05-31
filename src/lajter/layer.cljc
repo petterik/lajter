@@ -48,20 +48,24 @@
   (let [[mutations reads]
         (->> parsed-query
              (split-by (comp mutation-key? ::parser/key))
-             (map lajt.parser/parsed-query->query)
-             (map (fn [query]
-                    (into {}
-                          (comp
-                            (map (juxt identity (partial parser env query)))
-                            (remove (comp empty? second)))
-                          remotes))))]
+             (eduction
+               (map lajt.parser/parsed-query->query)
+               (map (fn [query]
+                      (into {}
+                            (comp
+                              (map (juxt identity (partial parser env query)))
+                              (remove (comp empty? second)))
+                            remotes)))))]
     {:layer.remote/reads   reads
      :layer.remote/mutates mutations
-     :layer.remote/targets (set (concat (keys reads) (keys mutations)))
+     :layer.remote/targets (set (concat (keys reads)
+                                                  (keys mutations)))
      :layer.remote/keys    (into #{}
-                                 (comp (mapcat parser/query->parsed-query)
+                                 (comp cat
+                                       (parser/query->parsed-query)
                                        (map ::parser/key))
-                                 (concat (vals reads) (vals mutations)))}))
+                                 (concat (vals reads)
+                                                   (vals mutations)))}))
 
 (defn ->local-layer [remote-layer parsed-query]
   (let [remote-mutations (:layer.remote/keys remote-layer)]
