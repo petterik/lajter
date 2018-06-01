@@ -17,7 +17,8 @@
   (p/clj-props this))
 
 (defn update-state! [this f & args]
-  (p/update-clj-state! this #(apply f % args)))
+  (p/update-clj-state! this #(apply f % args))
+  (.forceUpdate this))
 
 (defn get-computed
   ([this]

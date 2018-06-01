@@ -181,7 +181,9 @@
      (fn [this next-props old-state]
        (let [next-state (f this next-props old-state)]
          (when (not= old-state next-state)
-           #js {:lajter$clj-state next-state}))))
+           #?(:cljs
+              (doto (gobj/clone old-state)
+                (gobj/set "lajter$clj-state" next-state)))))))
    :componentDidUpdate
    (fn [f]
      (fn [this prev-props prev-state snapshot]
@@ -320,8 +322,18 @@
                                :routes     clj-routes}
                               (p/basis-t reconciler))]
     #?(:cljs
-       (do
-         (set-pending-props! component wrapped)
+       (let [klass (get-js-prop component "lajter$react-class")
+             new-props (doto (gobj/clone (.-props component))
+                         (gobj/set "lajter$wrapped-props" wrapped))
+             _ (set-pending-props! component wrapped)
+             new-state (when (some? (.-getDerivedStateFromProps klass))
+                         (.getDerivedStateFromProps klass
+                                                    new-props
+                                                    (.-state component)))]
+         (when (some? new-state)
+           (gobj/set (.-state component)
+                     "lajter$clj-state"
+                     (gobj/get new-state "lajter$clj-state")))
          (.forceUpdate ^js/React.Component component)))))
 
 ;; Put props in both props and state.
