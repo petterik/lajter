@@ -68,26 +68,33 @@
              (dom/div nil "NavbarB"))})
 
 (def Router
-  {:lajter/id      :lajter.web.main/Router
-   :lajter/routing {:navbar {:route.navbar/a NavbarA
-                             :route.navbar/b NavbarB}
-                    :body   {:route.body/a ComponentA
-                             :route.body/b ComponentB}}
-   :render         (fn [this props state]
-                     (dom/div nil
-                       (dom/p nil "ROUTER")
-                       (dom/div nil
-                         (dom/span nil "Set navbar:")
-                         (button "A" #(la/transact! this `[(route/set {:navbar :route.navbar/a})]))
-                         (button "B" #(la/transact! this `[(route/set {:navbar :route.navbar/b})])))
-                       (dom/div nil
-                         (dom/span nil "Set body:")
-                         (button "A" #(la/transact! this `[(route/set {:body :route.body/a})]))
-                         (button "B" #(la/transact! this `[(route/set {:body :route.body/b})])))
-                       (dom/p nil "NAVBAR: ")
-                       (la/render-route this :navbar)
-                       (dom/p nil "BODY: ")
-                       (la/render-route this :body)))})
+  {:lajter/id
+   :lajter.web.main/Router
+   :lajter/routing
+   {:navbar {:route.navbar/a NavbarA
+             :route.navbar/b NavbarB}
+    :body   {:route.body/a ComponentA
+             :route.body/b ComponentB}}
+   :componentDidUpdate
+   (fn [this]
+     (log "Router props: " (p/clj-props this))
+     (log "Router routing: " (p/clj-routes this)))
+   :render
+   (fn [this props state]
+     (dom/div nil
+       (dom/p nil "ROUTER")
+       (dom/div nil
+         (dom/span nil "Set navbar:")
+         (button "A" #(la/transact! this `[(route/set {:navbar :route.navbar/a})]))
+         (button "B" #(la/transact! this `[(route/set {:navbar :route.navbar/b})])))
+       (dom/div nil
+         (dom/span nil "Set body:")
+         (button "A" #(la/transact! this `[(route/set {:body :route.body/a})]))
+         (button "B" #(la/transact! this `[(route/set {:body :route.body/b})])))
+       (dom/p nil "NAVBAR: ")
+       (la/render-route this :navbar)
+       (dom/p nil "BODY: ")
+       (la/render-route this :body)))})
 
 (defn ^:after-load runit! []
   (let [config {:root-component Router

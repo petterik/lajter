@@ -1,12 +1,19 @@
 (ns lajter.protocols)
 
 (defprotocol IReconciler
+  (basis-t [this])
   (reconcile! [this])
   (react-class [this component-spec])
   (schedule-render! [this])
   (schedule-sends! [this])
   (send! [this])
   (select-route [this route-data]))
+
+(defprotocol IIndexer
+  (index-component! [this component])
+  (drop-component! [this component])
+  (is-indexed? [this component])
+  (components-to-render [this all-props all-routing]))
 
 (defprotocol IEnvironment
   (to-env [this]))
@@ -15,12 +22,14 @@
   (get-reconciler [this]))
 
 (defprotocol IReactElement
-  (raw-clj-props [this])
+  (all-clj-props [this])
+  (all-clj-routes [this])
   (clj-props [this] "returns the clojure props for this element.")
   (clj-state [this])
   (update-clj-state! [this f])
   (clj-computed [this])
-  (clj-routes [this]))
+  (clj-routes [this])
+  (depth [this]))
 
 (defprotocol ILajterClass
   (spec-map [this]))

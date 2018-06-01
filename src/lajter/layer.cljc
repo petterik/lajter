@@ -44,6 +44,9 @@
   [(filter pred coll)
    (remove pred coll)])
 
+(defn reducible-concat [& colls]
+  (eduction cat colls))
+
 (defn ->remote-layer [parser remotes env parsed-query]
   (let [[mutations reads]
         (->> parsed-query
@@ -58,13 +61,13 @@
                             remotes)))))]
     {:layer.remote/reads   reads
      :layer.remote/mutates mutations
-     :layer.remote/targets (set (concat (keys reads)
+     :layer.remote/targets (set (reducible-concat (keys reads)
                                                   (keys mutations)))
      :layer.remote/keys    (into #{}
                                  (comp cat
                                        (parser/query->parsed-query)
                                        (map ::parser/key))
-                                 (concat (vals reads)
+                                 (reducible-concat (vals reads)
                                                    (vals mutations)))}))
 
 (defn ->local-layer [remote-layer parsed-query]

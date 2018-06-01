@@ -14,6 +14,25 @@
 
 (def ^:dynamic ^:private *this*)
 
+(deftype LajterProps [props basis-t])
+
+(defn lajter-props [props basis-t]
+  (LajterProps. props basis-t))
+
+(def ^:private nil-props (lajter-props nil -1))
+
+(defn unwrap [^LajterProps lajter-props]
+  (.-props lajter-props))
+
+(defn props-basis-t [^LajterProps lajter-props]
+  (.-basis-t lajter-props))
+
+(defn latest-props
+  ([x y]
+   (max-key props-basis-t x y))
+  ([x y z]
+   (latest-props x (latest-props y z))))
+
 (def constantly-props (fn [this & _] (p/clj-props this)))
 (def constantly-state (fn [this & _] (p/clj-state this)))
 
@@ -22,24 +41,51 @@
      (defn- get-js-prop [obj k]
        (some-> (or (.-props obj) obj) (gobj/get k)))
 
+     (defn- get-js-state [obj k]
+       (some-> (or (.-state obj) obj) (gobj/get k)))
+
+     (defn- props-props [obj]
+       (or (get-js-prop obj "lajter$wrapped-props") nil-props))
+     (defn- state-props [obj]
+       (or (get-js-state obj "lajter$state$wrapped-props") nil-props))
+
+     (defn set-pending-props! [component wrapped]
+       (let [state (.-state component)]
+         (gobj/set state "lajter$state$wrapped-props" wrapped)))
+
+     (defn- get-unwrapped-props [obj]
+       (unwrap
+         (latest-props
+          (props-props obj)
+          (state-props obj))))
+
+     (defn- clear-old-props! [obj]
+       (when-some [sp (state-props obj)]
+         (when-not (identical? (latest-props sp (props-props obj))
+                               sp)
+           (gobj/remove obj "lajter$state$wrapped-props"))))
+
      (extend-type object
        p/IReactElement
-       (raw-clj-props [this]
-         (get-js-prop this "lajter$raw-clj-props"))
+       (all-clj-props [this]
+         (:all-props (get-unwrapped-props this)))
+       (all-clj-routes [this]
+         (:all-routes (get-unwrapped-props this)))
        (clj-props [this]
-         (get-js-prop this "lajter$clj-props"))
+         (:props (get-unwrapped-props this)))
+       (clj-routes [this]
+         (:routes (get-unwrapped-props this)))
        (clj-state [this]
-         (some-> (or (.-state this) this)
-                 (gobj/get "lajter$clj-state")))
+         (get-js-state this "lajter$clj-state"))
        (clj-computed [this]
          (get-js-prop this "lajter$clj-computed"))
-       (clj-routes [this]
-         (get-js-prop this "lajter$clj-routes"))
        (update-clj-state! [this f]
-         (.setState this (fn [state]
-                           #js {:lajter$clj-state
-                                (f (p/clj-state state))}))
-         this)
+         (doto this
+           (.setState (fn [state]
+                        (gobj/set state "lajter$clj-state"
+                                  (f (p/clj-state state)))))))
+       (depth [this]
+         (get-js-prop this "lajter$depth"))
        p/IHasReconciler
        (get-reconciler [this]
          (get-js-prop this "lajter$reconciler"))
@@ -95,13 +141,13 @@
                arg-bindings# (concat (xform-args args#)
                                      (xform-call-with call-with#))
                sym# (gensym)]
-           (if-not (:fn? sig true)
+           (if (:constant? sig)
              `(fn [~sym#] ~sym#)
              `(fn [~sym#]
                 (fn ~args#
                   (lajter.react/with-this
                     ~(if (empty? arg-bindings#)
-                       `(~sym#)
+                       `(~sym# lajter.react/*this*)
                        `(let [~@arg-bindings#]
                           ~(if (some? call-with#)
                              `(~sym# lajter.react/*this* ~@call-with#)
@@ -123,7 +169,7 @@
       :componentDidMount        {:args []}
       :componentWillUnmount     {:args []}
       :componentDidCatch        {:args [error info]}
-      :displayName              {:fn? false}}))
+      :displayName              {:constant? true}}))
 
 (def method-middleware
   {:getDerivedStateFromProps
@@ -131,7 +177,46 @@
      (fn [this next-props old-state]
        (let [next-state (f this next-props old-state)]
          (when (not= old-state next-state)
-           #js {:lajter$clj-state next-state}))))})
+           #js {:lajter$clj-state next-state}))))
+   :componentDidUpdate
+   (fn [f]
+     (fn [this prev-props prev-state snapshot]
+       (let [ret (f this prev-props prev-state snapshot)]
+         #?(:cljs (clear-old-props! this))
+         ret)))
+   :componentDidMount
+   (fn [f]
+     (fn [this]
+       (let [reconciler (p/get-reconciler this)
+             indexer (-> reconciler :config :indexer)]
+         (p/index-component! indexer this)
+         (f this))))
+   :componentWillUnmount
+   (fn [f]
+     (fn [this]
+       (let [reconciler (p/get-reconciler this)
+             indexer (-> reconciler :config :indexer)]
+         (p/drop-component! indexer this)
+         (f this))))})
+
+(def default-methods
+  {:shouldComponentUpdate
+   (fn [next-props next-state]
+     (with-this
+       (or (not= (p/clj-routes *this*)
+                 (p/clj-routes next-props))
+           (not= (p/clj-props *this*)
+                 (p/clj-props next-props))
+           (not= (p/clj-state *this*)
+                 (p/clj-state next-state)))))
+   :componentDidMount
+   (fn [this])
+   :componentDidUpdate
+   (fn [this prev-props prev-state snapshot])
+   :getSnapshotBeforeUpdate
+   (fn [this prev-props prev-state])
+   :componentWillUnmount
+   (fn [this])})
 
 #_(s/def ::class-spec
     (s/keys :req-un [::render]
@@ -178,20 +263,9 @@
        (set-all! ctor statics)
        ctor)))
 
-(def default-methods
-  {:shouldComponentUpdate
-   (fn [next-props next-state]
-     (with-this
-       (or (not= (p/clj-routes *this*)
-                 (p/clj-routes next-props))
-           (not= (p/clj-props *this*)
-                 (p/clj-props next-props))
-           (not= (p/clj-state *this*)
-                 (p/clj-state next-state)))))})
-
 (defn create-class [class-spec]
   (let [spec (assoc class-spec :lajter.query/keys (query-keys class-spec))
-        methods (into default-methods (wrap-spec method-wrappers spec))
+        methods (wrap-spec method-wrappers (into default-methods spec))
         statics (wrap-spec static-wrappers spec)]
     (let [klass (create-react-class methods statics)
           ;; TODO: Un hardcode this.
@@ -201,15 +275,47 @@
                                (spec-map [_] spec)))])]
       klass)))
 
+(defn- select-props [spec props]
+  (select-keys props (:lajter.query/keys spec)))
+
+(defn- select-routes [spec routes]
+  (select-keys routes (keys (:lajter/routing spec))))
+
 (defn create-instance
-  [reconciler klass props computed routes]
-  (let [clj-props (select-keys props (:lajter.query/keys (p/spec-map klass)))]
+  [reconciler klass props computed routes depth]
+  (let [spec (p/spec-map klass)
+        clj-props (select-props spec props)
+        clj-routes (select-routes spec routes)
+        wrapped (lajter-props {:all-props  props
+                               :all-routes routes
+                               :props      clj-props
+                               :routes     clj-routes}
+                              (p/basis-t reconciler))]
     #?(:cljs
        (react/createElement
          klass
-         #js {:lajter$clj-props     clj-props
-              :lajter$raw-clj-props props
-              :lajter$clj-routes    routes
+         #js {:lajter$wrapped-props wrapped
               :lajter$reconciler    reconciler
               :lajter$react-class   klass
-              :lajter$clj-computed  computed}))))
+              :lajter$clj-computed  computed
+              :lajter$depth         depth}))))
+
+(defn update-component!
+  [reconciler component props routes]
+  (let [spec (p/spec-map component)
+        clj-props (select-props spec props)
+        clj-routes (select-routes spec routes)
+        wrapped (lajter-props {:all-props  props
+                               :all-routes routes
+                               :props      clj-props
+                               :routes     clj-routes}
+                              (p/basis-t reconciler))]
+    #?(:cljs
+       (do
+         (set-pending-props! component wrapped)
+         (.forceUpdate ^js/React.Component component)))))
+
+;; Put props in both props and state.
+;; Place an incrementing basis-t in the props
+;; In componentWillUpdate: merge pending props and state.
+;; - Merge pending means to ...?

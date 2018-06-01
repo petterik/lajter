@@ -39,24 +39,48 @@
   (get (:lajter.routing/choices route-data)
        (p/select-route reconciler route-data)))
 
+(defn routing-choices [spec]
+  (eduction
+    (map (fn [[route choices]]
+           {:lajter.routing/route   route
+            :lajter.routing/choices choices}))
+    (:lajter/routing spec)))
+
+(defn component-routes [reconciler x]
+  (some->> (cond-> x (not (map? x)) (p/spec-map))
+           (routing-choices)
+           (not-empty)
+           (into {}
+                 (map (juxt :lajter.routing/route
+                            #(p/select-route reconciler %))))))
+
 (defn get-query [x]
   (:lajter/query (cond-> x (not (map? x)) p/spec-map)))
 
 (defn get-full-query [reconciler x]
-  (let [spec (cond-> x (not (map? x)) (p/spec-map))
-        routing (when-let [routing (:lajter/routing spec)]
-                  (eduction
-                    (map (fn [[route choices]]
-                           (route->component
-                             reconciler
-                             {:lajter.routing/route   route
-                              :lajter.routing/choices choices})))
-                    routing))]
+  (let [spec (cond-> x (not (map? x)) (p/spec-map))]
     (not-empty
       (into (:lajter/query spec [])
             (mapcat #(get-full-query reconciler %))
-            (concat (:lajter/children spec)
-                    routing)))))
+            (eduction
+              cat
+              [(:lajter/children spec)
+               (eduction
+                 (map #(route->component reconciler %))
+                 (routing-choices spec))])))))
+
+(defn get-full-routing [reconciler x]
+  (let [spec (cond-> x (not (map? x)) (p/spec-map))
+        routing (component-routes reconciler x)]
+    (into (or routing {})
+          (map #(get-full-routing reconciler %))
+          (eduction
+            cat
+            [(:lajter/children spec)
+             (eduction
+               (map (fn [[route selected-route]]
+                      (get-in spec [:lajter/routing route selected-route])))
+               routing)]))))
 
 (defn get-root [reconciler]
   (get-in reconciler [:config :root-component]))
@@ -111,17 +135,6 @@
       (p/squash-local-layers! reconciler))
     (schedule-render! reconciler)))
 
-(defn routes-for-component [reconciler x]
-  (let [spec (cond-> x (not (map? x)) (p/spec-map))
-        select-route (fn [[route choices]]
-                       (p/select-route
-                         reconciler
-                         {:lajter.routing/route   route
-                          :lajter.routing/choices choices}))]
-    (some->> (:lajter/routing spec)
-             (not-empty)
-             (into {} (map (juxt key select-route))))))
-
 (defrecord Reconciler [config state]
   p/IHasReconciler
   (get-reconciler [this] this)
@@ -144,6 +157,8 @@
         (swap! state update :layers layer/drop-layers local-layers))))
 
   p/IReconciler
+  (basis-t [this]
+    (:t @state))
   (react-class [this component-spec]
     (if-let [klass (get (:class-cache @state) component-spec)]
       klass
@@ -152,22 +167,30 @@
         klass)))
   (reconcile! [this]
     (swap! state dissoc :scheduled-render?)
-    (let [{:keys [parser root-render target root-component]} config
-          root-class (p/react-class this root-component)
+    (let [{:keys [parser root-render target indexer root-component]} config
           db (deref (:state config))
-          layers (:layers @state [])
+          {:keys [layers] :or {layers []}} @state
           _ (log "layers: " {:layers layers})
           db (layer/db-with-layers this db layers)
           env (assoc (p/to-env this) :state (atom db) :db db)
-          props (parser env (get-full-query this root-class))
-          routes (routes-for-component this root-component)]
-      (root-render
-        (lajter.react/create-instance this
-                                      root-class
-                                      props
-                                      nil
-                                      routes)
-        target)))
+          root-class (p/react-class this root-component)
+          all-props (parser env (get-full-query this root-class))
+          all-routing (get-full-routing this root-class)]
+      (if-let [cs (not-empty
+                    (p/components-to-render indexer all-props all-routing))]
+        (let [cs ((:optimize config identity) cs)]
+          (doseq [c cs]
+            (when (p/is-indexed? indexer c)
+              (lajter.react/update-component! this c all-props all-routing))))
+        (root-render
+          (lajter.react/create-instance this
+                                        root-class
+                                        all-props
+                                        nil
+                                        all-routing
+                                        0)
+          target)
+        )))
   (schedule-render! [this]
     (let [[old _] (swap-vals! state assoc :scheduled-render? true)]
       (not (:scheduled-render? old))))
@@ -196,6 +219,61 @@
     ((:route-fn config)
       (p/to-env this)
       route-data)))
+
+(defn- update-index [index index-keys-fn f component]
+  (reduce (fn [index query-key]
+            (update index query-key (fnil f #{}) component))
+          index
+          (index-keys-fn component)))
+
+(defn- component-query-keys [component]
+  (:lajter.query/keys (p/spec-map component)))
+
+(defn- routing-keys [component]
+  (keys (:lajter/routing (p/spec-map component))))
+
+(defrecord Indexer [state]
+  p/IIndexer
+  (index-component! [this component]
+    (swap! state
+           #(-> (update % :components (fnil conj #{}) component)
+                (update :query-key->component
+                        update-index
+                        component-query-keys
+                        conj
+                        component)
+                (update :route-key->component
+                        update-index
+                        routing-keys
+                        conj
+                        component))))
+  (drop-component! [this component]
+    (swap! state
+           #(-> (update % :components disj component)
+                (update :query-key->component
+                        update-index
+                        component-query-keys
+                        disj
+                        component)
+                (update :route-key->component
+                        update-index
+                        routing-keys
+                        disj
+                        component))))
+  (is-indexed? [this component]
+    (contains? (:components @state) component))
+  (components-to-render [this all-props all-routes]
+    (let [state @state
+          query-index (:query-key->component state)
+          route-index (:route-key->component state)]
+      (into #{} cat
+            (eduction
+              cat
+              [(vals (select-keys query-index (keys all-props)))
+               (vals (select-keys route-index (keys all-routes)))])))))
+
+(defn indexer []
+  (Indexer. (atom {})))
 
 (defn mount [{:as   config}]
   (let [parser (lajt.parser/parser
@@ -245,18 +323,20 @@
         merge-fn (fn [reconciler db value tx-info]
                    (merge db value))
         route-fn (fn [env {:lajter.routing/keys [route choices]}]
-                   (log "Selecting route for: " route " choices: " choices)
-                   (log "State: " @(:state env))
                    (get-in @(:state env) [:routing route]))
 
-        r (->Reconciler (assoc config :parser parser
-                                      :send-fn send-fn
-                                      :merge-fn merge-fn
-                                      :route-fn route-fn)
-                        (atom {}))]
-    (log "state: " (:state config))
+        r (->Reconciler
+            (assoc config
+              :parser parser
+              :send-fn send-fn
+              :merge-fn merge-fn
+              :route-fn route-fn
+              :indexer (indexer)
+              :optimize  #(sort-by p/depth %))
+            (atom {}))]
     (add-watch (:state config) ::reconciler
                (fn [k ref old-state new-state]
+                 (swap! (:state r) update :t inc)
                  (schedule-render! r)))
     r))
 
@@ -271,9 +351,11 @@
     (lajter.react/create-instance
       reconciler
       (p/react-class reconciler child-component)
-      (p/raw-clj-props this)
+      (p/all-clj-props this)
+      ;; TODO: Put all-clj-props together with all-clj-routes.
       (get-child-computed this child-component)
-      (routes-for-component reconciler child-component))))
+      (p/all-clj-routes this)
+      (inc (p/depth this)))))
 
 (defn render-route [this route]
   ;; TODO: Debug this.
