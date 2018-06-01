@@ -35,6 +35,7 @@
 
 (def constantly-props (fn [this & _] (p/clj-props this)))
 (def constantly-state (fn [this & _] (p/clj-state this)))
+(def constantly-routes (fn [this & _] (p/clj-routes this)))
 
 #?(:cljs
    (do
@@ -49,17 +50,19 @@
      (defn- state-props [obj]
        (or (get-js-state obj "lajter$state$wrapped-props") nil-props))
 
-     (defn set-pending-props! [component wrapped]
-       (let [state (.-state component)]
-         (gobj/set state "lajter$state$wrapped-props" wrapped)))
+     (defn- get-latest-props
+       ([obj]
+        (get-latest-props obj obj))
+       ([js-props js-state]
+        (latest-props
+          (props-props js-props)
+          (state-props js-state))))
 
-     (defn- get-latest-props [obj]
-       (latest-props
-         (props-props obj)
-         (state-props obj)))
-
-     (defn- get-unwrapped-props [obj]
-       (unwrap (get-latest-props obj)))
+     (defn- get-unwrapped-props
+       ([obj] (get-unwrapped-props obj obj))
+       ([js-props js-state]
+        (unwrap
+          (get-latest-props js-props js-state))))
 
      (defn- clear-old-props! [obj]
        (when-some [sp (state-props obj)]
@@ -113,10 +116,11 @@
             ~@body)))
 
      (defn- xform-args [args]
-       (let [argument-xforms `{~'next-props p/clj-props
-                               ~'prev-props p/clj-props
-                               ~'next-state p/clj-state
-                               ~'prev-state p/clj-state}]
+       (let [argument-xforms `{~'next-props  p/clj-props
+                               ~'prev-props  p/clj-props
+                               ~'next-state  p/clj-state
+                               ~'prev-state  p/clj-state
+                               ~'next-routes p/clj-routes}]
          (mapcat
            (fn [arg]
              `[~arg (~(get argument-xforms arg `identity) ~arg)])
@@ -126,7 +130,8 @@
        (let [argument-generators `{~'prev-props constantly-props
                                    ~'props      constantly-props
                                    ~'prev-state constantly-state
-                                   ~'state      constantly-state}]
+                                   ~'state      constantly-state
+                                   ~'routes     constantly-routes}]
          (mapcat
            (fn [arg]
              (let [generator# (get argument-generators arg)]
@@ -162,11 +167,11 @@
 
 (def static-wrappers
   (react-method-wrappers
-    '{:getDerivedStateFromProps {:args [next-props prev-state]}}))
+    '{:getDerivedStateFromProps {:args [js-props js-state]}}))
 
 (def method-wrappers
   (react-method-wrappers
-    '{:shouldComponentUpdate    {:args [next-props next-state]}
+    '{:shouldComponentUpdate    {:args [js-props js-state]}
       :render                   {:args [] :call-with [props state]}
       :getSnapshotBeforeUpdate  {:args [prev-props prev-state]}
       :componentDidUpdate       {:args [prev-props prev-state snapshot]}
@@ -174,15 +179,21 @@
       :componentWillUnmount     {:args []}
       :componentDidCatch        {:args [error info]}
       :displayName              {:constant? true}}))
-
+(comment
+  (react-method-wrapper '{:args [js-props js-state]})
+  )
 (def method-middleware
   {:getDerivedStateFromProps
    (fn [f]
-     (fn [this next-props old-state]
-       (let [next-state (f this next-props old-state)]
+     (fn [this js-props js-state]
+       (let [#?@(:cljs [next-props (:props
+                                     (get-unwrapped-props js-props js-state))]
+                 :clj  [next-props js-props])
+             old-state (p/clj-state js-state)
+             next-state (f this next-props old-state)]
          (when (not= old-state next-state)
            #?(:cljs
-              (doto (gobj/clone old-state)
+              (doto (gobj/clone js-state)
                 (gobj/set "lajter$clj-state" next-state)))))))
    :componentDidUpdate
    (fn [f]
@@ -208,18 +219,47 @@
    (fn [f]
      (fn [this props state]
        (lajter.logger/log "Calling render on this: " (.-displayName this))
-       (f this props state)))})
+       (f this props state)))
+   :shouldComponentUpdate
+   (fn [f]
+     (fn [this js-props js-state]
+       (let [ret (f this js-props js-state)
+             #?@(:cljs [latest (unwrap
+                                 (latest-props
+                                   (props-props js-props)
+                                   (state-props js-state)))]
+                 :clj  [latest js-props])]
+         (let [not-eq-routes? (not= (p/clj-routes this)
+                                    (:routes latest))
+               not-eq-props? (not= (p/clj-props this)
+                                   (:props latest))
+               not-eq-state? (not= (p/clj-state this)
+                                   (p/clj-state js-state))]
+           (lajter.logger/log "shouldComponentUpdate?: " ret
+                              "component: " (.-displayName this)
+                              "not-eq-routes?: " not-eq-routes?
+                              "not-eq-props?: " not-eq-props?
+                              "not-eq-state?: " not-eq-state?
+                              #_#_#_#_#_#_#_#_#_#_#_#_"next-routes: " (p/clj-routes js-props)
+                                  "prev-routes: " (:routes latest)
+                                  "next-props: " (p/clj-props js-props)
+                                  "prev-props: " (:props latest)
+                                  "next-state: " (p/clj-state js-state)
+                                  "prev-state: " (p/clj-state this)
+                              ))
+         ret)))})
 
 (def default-methods
   {:shouldComponentUpdate
-   (fn [next-props next-state]
-     (with-this
-       (or (not= (p/clj-routes *this*)
-                 (p/clj-routes next-props))
-           (not= (p/clj-props *this*)
-                 (p/clj-props next-props))
-           (not= (p/clj-state *this*)
-                 (p/clj-state next-state)))))
+   (fn [this js-props js-state]
+     (let [#?@(:cljs [latest (get-unwrapped-props js-props js-state)]
+               :clj  [latest js-props])]
+       (or (not= (p/clj-routes this)
+                 (:routes latest))
+           (not= (p/clj-props this)
+                 (:props latest))
+           (not= (p/clj-state this)
+                 (p/clj-state js-state)))))
    :componentDidMount
    (fn [this])
    :componentDidUpdate
@@ -323,18 +363,30 @@
                               (p/basis-t reconciler))]
     #?(:cljs
        (let [klass (get-js-prop component "lajter$react-class")
-             new-props (doto (gobj/clone (.-props component))
-                         (gobj/set "lajter$wrapped-props" wrapped))
-             _ (set-pending-props! component wrapped)
-             new-state (when (some? (.-getDerivedStateFromProps klass))
-                         (.getDerivedStateFromProps klass
-                                                    new-props
-                                                    (.-state component)))]
-         (when (some? new-state)
-           (gobj/set (.-state component)
-                     "lajter$clj-state"
-                     (gobj/get new-state "lajter$clj-state")))
-         (.forceUpdate ^js/React.Component component)))))
+             state (doto (gobj/clone (.-state component))
+                     (gobj/set "lajter$state$wrapped-props" wrapped))
+             new-clj-state
+             (when (some? (.-getDerivedStateFromProps klass))
+               (-> (.getDerivedStateFromProps
+                     klass
+                     (.-props component)
+                     state)
+                   (gobj/get "lajter$clj-state")))
+             next-state
+             (cond-> state
+                     (some? new-clj-state)
+                     (doto (gobj/set "lajter$clj-state" new-clj-state)))
+             should-update? (.shouldComponentUpdate component
+                                                    (.-props component)
+                                                    next-state)]
+         (let [state (.-state component)]
+           (gobj/set state "lajter$clj-state"
+                     (gobj/get next-state "lajter$clj-state"))
+           (gobj/set state "lajter$state$wrapped-props"
+                     (gobj/get next-state "lajter$state$wrapped-props")))
+         (if should-update?
+           (.forceUpdate ^js/React.Component component)
+           (lajter.logger/log "Avoided render when updating component."))))))
 
 ;; Put props in both props and state.
 ;; Place an incrementing basis-t in the props

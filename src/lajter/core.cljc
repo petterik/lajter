@@ -311,9 +311,10 @@
                         'route/set
                         (swap! (:state env) update :routing merge p)
                         'foo/conj
-                        (swap! (:state env) update :foo conj (:x p))
+                        (swap! (:state env) update :foo (fnil conj []) (:x p))
                         'foo/pop
-                        (swap! (:state env) update :foo pop)
+                        (swap! (:state env) update :foo
+                               #(some-> (not-empty %) pop))
                         'bar/assoc
                         (swap! (:state env) update :bar assoc (:k p) (:v p))
                         'bar/dissoc
