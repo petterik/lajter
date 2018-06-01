@@ -59,16 +59,20 @@
 
 (def NavbarA
   {:lajter/id :lajter.web.main/NavbarA
+   :displayName "lajter.web.main/NavbarA"
    :render (fn [this props state]
              (dom/div nil "NavbarA"))})
 
 (def NavbarB
   {:lajter/id :lajter.web.main/NavbarB
+   :displayName "lajter.web.main/NavbarB"
    :render (fn [this props state]
              (dom/div nil "NavbarB"))})
 
 (def Router
-  {:lajter/id
+  {:displayName
+   "lajter.web.main/Router"
+   :lajter/id
    :lajter.web.main/Router
    :lajter/routing
    {:navbar {:route.navbar/a NavbarA

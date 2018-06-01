@@ -147,18 +147,22 @@
         (assoc :reconciler this)))
   p/ILayers
   (add-layer! [this layer]
-    (swap! state update :layers layer/add-layer layer))
+    (swap! state #(-> (update % :layers layer/add-layer layer)
+                      (update :t (fnil inc 0)))))
   (replace-layer! [this layer-id with-layer]
-    (swap! state update :layers layer/replace-layer layer-id with-layer))
+    (swap! state #(-> %
+                      (update :layers
+                              layer/replace-layer layer-id with-layer)
+                      (update :t (fnil inc 0)))))
   (squash-local-layers! [this]
     (let [layers (:layers @state)]
       (when-let [local-layers (seq (layer/leading-local-layers layers))]
         (swap! (:state config) #(layer/db-with-layers this % local-layers))
         (swap! state update :layers layer/drop-layers local-layers))))
 
+  p/IBasis
+  (basis-t [this] (:t @state))
   p/IReconciler
-  (basis-t [this]
-    (:t @state))
   (react-class [this component-spec]
     (if-let [klass (get (:class-cache @state) component-spec)]
       klass
@@ -180,8 +184,12 @@
                     (p/components-to-render indexer all-props all-routing))]
         (let [cs ((:optimize config identity) cs)]
           (doseq [c cs]
-            (when (p/is-indexed? indexer c)
-              (lajter.react/update-component! this c all-props all-routing))))
+            (when (and (p/is-indexed? indexer c)
+                       (not= (p/basis-t this) (p/basis-t c)))
+              (lajter.react/update-component! this
+                                              c
+                                              all-props
+                                              all-routing))))
         (root-render
           (lajter.react/create-instance this
                                         root-class
@@ -336,7 +344,6 @@
             (atom {}))]
     (add-watch (:state config) ::reconciler
                (fn [k ref old-state new-state]
-                 (swap! (:state r) update :t inc)
                  (schedule-render! r)))
     r))
 

@@ -53,11 +53,13 @@
        (let [state (.-state component)]
          (gobj/set state "lajter$state$wrapped-props" wrapped)))
 
+     (defn- get-latest-props [obj]
+       (latest-props
+         (props-props obj)
+         (state-props obj)))
+
      (defn- get-unwrapped-props [obj]
-       (unwrap
-         (latest-props
-          (props-props obj)
-          (state-props obj))))
+       (unwrap (get-latest-props obj)))
 
      (defn- clear-old-props! [obj]
        (when-some [sp (state-props obj)]
@@ -66,6 +68,8 @@
            (gobj/remove obj "lajter$state$wrapped-props"))))
 
      (extend-type object
+       p/IBasis
+       (basis-t [this] (props-basis-t (get-latest-props this)))
        p/IReactElement
        (all-clj-props [this]
          (:all-props (get-unwrapped-props this)))
@@ -197,7 +201,12 @@
        (let [reconciler (p/get-reconciler this)
              indexer (-> reconciler :config :indexer)]
          (p/drop-component! indexer this)
-         (f this))))})
+         (f this))))
+   :render
+   (fn [f]
+     (fn [this props state]
+       (lajter.logger/log "Calling render on this: " (.-displayName this))
+       (f this props state)))})
 
 (def default-methods
   {:shouldComponentUpdate

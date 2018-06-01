@@ -1,7 +1,9 @@
 (ns lajter.protocols)
 
+(defprotocol IBasis
+  (basis-t [this]))
+
 (defprotocol IReconciler
-  (basis-t [this])
   (reconcile! [this])
   (react-class [this component-spec])
   (schedule-render! [this])
