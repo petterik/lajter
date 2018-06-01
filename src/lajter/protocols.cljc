@@ -15,7 +15,7 @@
   (index-component! [this component])
   (drop-component! [this component])
   (is-indexed? [this component])
-  (components-to-render [this all-props all-routing]))
+  (components-to-render [this all-props all-routing prev-props prev-routing]))
 
 (defprotocol IEnvironment
   (to-env [this]))

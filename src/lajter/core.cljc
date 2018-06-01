@@ -173,16 +173,21 @@
     (swap! state dissoc :scheduled-render?)
     (let [{:keys [parser root-render target indexer root-component]} config
           db (deref (:state config))
-          {:keys [layers] :or {layers []}} @state
+          {:keys [layers root-element] :or {layers []}} @state
           _ (log "layers: " {:layers layers})
           db (layer/db-with-layers this db layers)
           env (assoc (p/to-env this) :state (atom db) :db db)
           root-class (p/react-class this root-component)
           all-props (parser env (get-full-query this root-class))
           all-routing (get-full-routing this root-class)]
-      (if-let [cs (not-empty
-                    (p/components-to-render indexer all-props all-routing))]
-        (let [cs ((:optimize config identity) cs)]
+
+      (if (some? root-element)
+        (let [prev-props (p/all-clj-props root-element)
+              prev-routing (p/all-clj-routes root-element)
+              cs (p/components-to-render indexer
+                                         all-props all-routing
+                                         prev-props prev-routing)
+              cs ((:optimize config identity) cs)]
           (doseq [c cs]
             (when (and (p/is-indexed? indexer c)
                        (not= (p/basis-t this) (p/basis-t c)))
@@ -190,15 +195,13 @@
                                               c
                                               all-props
                                               all-routing))))
-        (root-render
-          (lajter.react/create-instance this
-                                        root-class
-                                        all-props
-                                        nil
-                                        all-routing
-                                        0)
-          target)
-        )))
+        (let [root-elem
+              (-> (lajter.react/create-instance
+                    this root-class all-props nil all-routing 0)
+                  (root-render target))]
+          (swap! state assoc :root-element root-elem)
+          root-elem))))
+
   (schedule-render! [this]
     (let [[old _] (swap-vals! state assoc :scheduled-render? true)]
       (not (:scheduled-render? old))))
@@ -206,7 +209,7 @@
     (let [[old _] (swap-vals! state assoc :scheduled-sends? true)]
       (not (:scheduled-sends? old))))
   (send! [this]
-    (log "SEND!: " @state)
+    (log "SEND!: " (dissoc @state :root-element))
     (let [remote-layer (layer/first-remote-unsent (:layers @state))]
       (swap! state #(-> (assoc % :scheduled-sends? nil)
                         (cond-> (some? remote-layer)
@@ -240,6 +243,11 @@
 (defn- routing-keys [component]
   (keys (:lajter/routing (p/spec-map component))))
 
+(defn- dissoc-same [a b]
+  (reduce-kv (fn [m k v] (cond-> m (= v (get b k)) (dissoc k)))
+             a
+             a))
+
 (defrecord Indexer [state]
   p/IIndexer
   (index-component! [this component]
@@ -270,15 +278,15 @@
                         component))))
   (is-indexed? [this component]
     (contains? (:components @state) component))
-  (components-to-render [this all-props all-routes]
+  (components-to-render [this all-props all-routes prev-props prev-routes]
     (let [state @state
           query-index (:query-key->component state)
-          route-index (:route-key->component state)]
-      (into #{} cat
-            (eduction
-              cat
-              [(vals (select-keys query-index (keys all-props)))
-               (vals (select-keys route-index (keys all-routes)))])))))
+          route-index (:route-key->component state)
+          changed-props (dissoc-same all-props prev-props)
+          by-props (vals (select-keys query-index (keys changed-props)))
+          changed-routes (dissoc-same all-routes prev-routes)
+          by-routes (vals (select-keys route-index (keys changed-routes)))]
+      (into #{} cat (eduction cat [by-props by-routes])))))
 
 (defn indexer []
   (Indexer. (atom {})))
