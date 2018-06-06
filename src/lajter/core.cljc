@@ -274,12 +274,6 @@
 ;;;;;;;;;;;;;;;;;
 ;; Indexer
 
-(defn- update-index [index index-keys-fn f component]
-  (reduce (fn [index query-key]
-            (update index query-key (fnil f #{}) component))
-          index
-          (index-keys-fn component)))
-
 (defn- component-query-keys [component]
   (:lajter.query/keys (p/spec-map component)))
 
@@ -291,34 +285,32 @@
              a
              a))
 
+(def idx->keys-fn
+  {:query-key->component component-query-keys
+   :route-key->component routing-keys})
+
 (defrecord Indexer [state]
   p/IIndexer
   (index-component! [this component]
-    (swap! state
-           #(-> (update % :components (fnil conj #{}) component)
-                (update :query-key->component
-                        update-index
-                        component-query-keys
-                        conj
-                        component)
-                (update :route-key->component
-                        update-index
-                        routing-keys
-                        conj
-                        component))))
+    (let [add-component
+          (fn [state idx]
+            (reduce #(update-in %1 [idx %2] (fnil conj #{}) component)
+                    state
+                    ((get idx->keys-fn idx) component)))]
+      (swap! state
+            #(-> (update % :components (fnil conj #{}) component)
+                 (add-component :query-key->component)
+                 (add-component :route-key->component)))))
   (drop-component! [this component]
-    (swap! state
-           #(-> (update % :components disj component)
-                (update :query-key->component
-                        update-index
-                        component-query-keys
-                        disj
-                        component)
-                (update :route-key->component
-                        update-index
-                        routing-keys
-                        disj
-                        component))))
+    (let [remove-component
+          (fn [state idx]
+            (reduce #(update-in %1 [idx %2] (fnil disj #{}) component)
+                    state
+                    ((get idx->keys-fn idx) component)))]
+      (swap! state
+            #(-> (update % :components disj component)
+                 (remove-component :query-key->component)
+                 (remove-component :route-key->component)))))
   (is-indexed? [this component]
     (contains? (:components @state) component))
   (components-to-render [this all-props all-routes prev-props prev-routes]
@@ -329,7 +321,9 @@
           by-props (vals (select-keys query-index (keys changed-props)))
           changed-routes (dissoc-same all-routes prev-routes)
           by-routes (vals (select-keys route-index (keys changed-routes)))]
-      (into #{} cat (eduction cat [by-props by-routes])))))
+      (-> #{}
+          (into cat by-props)
+          (into cat by-routes)))))
 
 (defn indexer []
   (Indexer. (atom {})))
