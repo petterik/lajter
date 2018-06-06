@@ -14,22 +14,22 @@ Problems I had:
 
 Before I explain these problems and how I've solved them in lajter, here's an overview of the differences between lajter and om.next:
 * Kept in:
-** Structure: Reconciler, Parser, Indexer, Send, Merge
-** Server side rendering (wip)
-** Shared (wip)
+  * Structure: Reconciler, Parser, Indexer, Send, Merge
+  * Server side rendering (wip)
+  * Shared (wip)
 * Left out:
-** QueryParams
-** Sub queries
-** Dynamic queries
-** App state normalization/denormalization
-** Component factories
-** Having to implement custom joins and unions to nest component's queries.
+  * QueryParams
+  * Sub queries
+  * Dynamic queries
+  * App state normalization/denormalization
+  * Component factories
+  * Having to implement custom joins and unions to nest component's queries.
 * New:
-** Flattened queries
-** Routing support
-** Optimistic mutation rollback (Layers)
-** Remote queries with contexts
-** Remote query resolver (mostly useful for datalog queries)
+  * Flattened queries
+  * Routing support
+  * Optimistic mutation rollback (Layers)
+  * Remote queries with contexts
+  * Remote query resolver (mostly useful for datalog queries)
 
 I personally use datascript, which makes it easy to merge data into the app-state. If you'd want to use om.next's db-format, please let me know so we can make sure there are enough hooks to plug those pieces in.
 
