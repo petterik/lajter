@@ -3,7 +3,6 @@
     [devtools.core :as devtools]
     [lajter.logger :refer [log]]
     [lajter.core :as la]
-    [lajter.react :as re]
     [lajter.protocols :as p]
     [react-dom :as react-dom]
     [om.dom :as dom]))
@@ -100,19 +99,82 @@
        (dom/p nil "BODY: ")
        (la/render-route this :body)))})
 
+
+(defonce reconciler-atom (atom nil))
+(defn redef-reconciler [config]
+  (when-let [r @reconciler-atom]
+    (la/stop! r))
+  (reset! reconciler-atom (la/mount config)))
+
+(defn reloaded [config]
+  (log "RELOADED :D")
+  (when (or (nil? @reconciler-atom))
+    (redef-reconciler config))
+
+  (la/schedule-render! @reconciler-atom))
+
 (defn ^:after-load runit! []
-  (let [config {:root-component Router
+  (let [mutate (fn [env k p]
+                 (if (:target env)
+                   (when (= "foo" (namespace k))
+                     [true :foo])
+                   (condp = k
+                     'route/set
+                     (swap! (:state env) update :routing merge p)
+                     'foo/conj
+                     (swap! (:state env) update :foo (fnil conj []) (:x p))
+                     'foo/pop
+                     (swap! (:state env) update :foo
+                            #(some-> (not-empty %) pop))
+                     'bar/assoc
+                     (swap! (:state env) update :bar assoc (:k p) (:v p))
+                     'bar/dissoc
+                     (swap! (:state env) update :bar #(dissoc % (first (keys %)))))))
+        app-state (atom {:routing {:navbar :route.navbar/a
+                                   :body   :route.body/a}
+                         :foo     [1 2 3 4]
+                         :bar     {:a :b}
+                         :baz     "foo"})
+        remote-state (atom @app-state)
+        send-fn (fn [reconciler cb query target]
+                  (log "would send query: " query
+                       " to target: " target)
+                  (js/setTimeout
+                    #(let [{:keys [parser] :as env} (p/to-env reconciler)
+                           remote-parse
+                           (parser (assoc env :state remote-state)
+                                   (lajt.parser/update-query
+                                     (map (fn [{:lajt.parser/keys [key] :as m}]
+                                            (if (= 'foo/conj key)
+                                              (update-in m [:lajt.parser/params :x] inc)
+                                              m)))
+                                     query))]
+                       (cb (into {}
+                                 (remove (comp symbol? key))
+                                 remote-parse)))
+                    2000))
+        config {:root-component Router
                 :root-render    react-dom/render
                 :target         (.getElementById js/document "app")
                 :remotes        [:remote]
-                :state          (atom {:routing {:navbar :route.navbar/a
-                                                 :body   :route.body/a}
-                                       :foo     [1 2 3 4]
-                                       :bar     {:a :b}
-                                       :baz     "foo"})}]
+                :state          app-state
+                :read           (lajt.read/->read-fn
+                                  (fn [k]
+                                    {:custom (fn [env] (get @(:state env) k))
+                                     :remote true})
+                                  {})
+                :mutate         mutate
+                :send-fn        send-fn
+                :merge-fn       (fn [reconciler db value tx-info]
+                                  (merge db value))
+                :route-fn       (fn [env {:lajter.routing/keys
+                                          [route choices]}]
+                                  (get-in @(:state env) [:routing route]))
+                :query-param-fn (fn [env]
+                                  {:routes (:routing @(:state env))})}]
 
-    (reset! la/reconciler-atom nil)
-    (lajter.core/reloaded config)))
+    (reset! reconciler-atom nil)
+    (reloaded config)))
 
 (defn -main [& args]
   (enable-console-print!)

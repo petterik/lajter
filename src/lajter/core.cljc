@@ -10,6 +10,9 @@
     [om.dom :as dom]
     #?@(:cljs [[goog.object :as gobj]])))
 
+;;;;;;;;;;;;;;;;;;;;;;;;
+;; Component functions
+
 (defn get-state [this]
   (p/clj-state this))
 
@@ -35,6 +38,39 @@
 (defn component? [x]
   (and (instance? p/IReactElement x)
        (some? (p/clj-props x))))
+
+(defn- get-child-computed [this child-component]
+  (some-> (p/spec-map this)
+          :lajter/computed
+          (get child-component)
+          (as-> f (f this))))
+
+(defn render-child [this child-component]
+  (let [reconciler (p/get-reconciler this)]
+    (lajter.react/create-instance
+      reconciler
+      (p/react-class reconciler child-component)
+      (p/all-clj-props this)
+      ;; TODO: Put all-clj-props together with all-clj-routes.
+      (get-child-computed this child-component)
+      (p/all-clj-routes this)
+      (inc (p/depth this)))))
+
+(defn render-route [this route]
+  ;; TODO: Debug this.
+  ;; GET the stuff to render.
+  (let [selected-route (get (p/clj-routes this) route)
+        child-component (-> (p/spec-map this)
+                            (:lajter/routing)
+                            (get-in [route selected-route]))]
+    (if (some? child-component)
+      (render-child this child-component)
+      (log "WARN: No child component for route: " route
+           " selected-route: " selected-route
+           " routing: " (:lajter/routing (p/spec-map this))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Reconciler, query, routes, stuff
 
 (defn route->component [reconciler route-data]
   (get (:lajter.routing/choices route-data)
@@ -235,6 +271,9 @@
     (when-let [f (:query-param-fn config)]
       (f (p/to-env this)))))
 
+;;;;;;;;;;;;;;;;;
+;; Indexer
+
 (defn- update-index [index index-keys-fn f component]
   (reduce (fn [index query-key]
             (update index query-key (fnil f #{}) component))
@@ -248,7 +287,7 @@
   (keys (:lajter/routing (p/spec-map component))))
 
 (defn- dissoc-same [a b]
-  (reduce-kv (fn [m k v] (cond-> m (= v (get b k)) (dissoc k)))
+  (reduce-kv (fn [m k v] (cond-> m (identical? v (get b k)) (dissoc k)))
              a
              a))
 
@@ -295,112 +334,40 @@
 (defn indexer []
   (Indexer. (atom {})))
 
-(defn mount [{:as   config}]
-  (let [parser (lajt.parser/parser
-                 {:lajt.parser/query-plugins
-                  [(lajt.parser/dedupe-query-plugin {})]
-                  :read
-                  (lajt.read/->read-fn
-                    (fn [k]
-                      {:custom (fn [env] (get @(:state env) k))
-                       :remote true})
-                    {})
-                  :mutate
-                  (fn [env k p]
-                    (if (:target env)
-                      (when (= "foo" (namespace k))
-                        [true :foo])
-                      (condp = k
-                        'route/set
-                        (swap! (:state env) update :routing merge p)
-                        'foo/conj
-                        (swap! (:state env) update :foo (fnil conj []) (:x p))
-                        'foo/pop
-                        (swap! (:state env) update :foo
-                               #(some-> (not-empty %) pop))
-                        'bar/assoc
-                        (swap! (:state env) update :bar assoc (:k p) (:v p))
-                        'bar/dissoc
-                        (swap! (:state env) update :bar #(dissoc % (first (keys %)))))))})
-        remote-state (atom @(:state config))
-        send-fn (fn [reconciler cb query target]
-                  (log "would send query: " query
-                       " to target: " target)
-                  #?(:cljs
-                     (js/setTimeout
-                       #(let [remote-parse
-                              (parser (assoc (p/to-env reconciler) :state remote-state)
-                                      (lajt.parser/update-query
-                                        (map (fn [{:lajt.parser/keys [key] :as m}]
-                                               (if (= 'foo/conj key)
-                                                 (update-in m [:lajt.parser/params :x] inc)
-                                                 m)))
-                                        query))]
-                          (cb (into {}
-                                    (remove (comp symbol? key))
-                                    remote-parse)))
-                       2000)))
-        merge-fn (fn [reconciler db value tx-info]
-                   (merge db value))
-        route-fn (fn [env {:lajter.routing/keys [route choices]}]
-                   (get-in @(:state env) [:routing route]))
-        query-param-fn (fn [env]
-                         {:routes (:routing @(:state env))})
+;;;;;;;;;;;;;;;;;;;;;;;
+;; Public entry point
 
-        r (->Reconciler
-            (assoc config
-              :parser parser
-              :send-fn send-fn
-              :merge-fn merge-fn
-              :route-fn route-fn
-              :query-param-fn query-param-fn
-              :indexer (indexer)
-              :optimize  #(sort-by p/depth %))
-            (atom {}))]
+(defn mount [{:keys [parser send-fn merge-fn route-fn
+                     query-param-fn indexer optimize]
+              :or {send-fn (fn [reconciler cb query target])
+                   merge-fn (fn [reconciler db value tx-info])
+                   route-fn (fn [env {:lajter.routing/keys [route choices]}])
+                   query-param-fn (fn [env])
+                   indexer (indexer)
+                   optimize #(sort-by p/depth %)}
+              :as config}]
+  (let [parser (or parser
+                   (when (or (:read config) (:mutate config))
+                     (lajt.parser/parser
+                       (merge
+                         {:lajt.parser/query-plugins [(lajt.parser/dedupe-query-plugin {})]}
+                         config)))
+                   (throw
+                     (ex-info
+                       "No :parser, :read or :mutate passed in config"
+                       {:config config})))
+        reconciler (->Reconciler
+                     (assoc config
+                       :parser parser
+                       :send-fn send-fn
+                       :merge-fn merge-fn
+                       :route-fn route-fn
+                       :query-param-fn query-param-fn
+                       :indexer indexer
+                       :optimize optimize)
+                     (atom {}))]
+    ;; TODO: Add to lifecycle component/start
     (add-watch (:state config) ::reconciler
                (fn [k ref old-state new-state]
-                 (schedule-render! r)))
-    r))
-
-(defn- get-child-computed [this child-component]
-  (some-> (p/spec-map this)
-                   :lajter/computed
-                   (get child-component)
-                   (as-> f (f this))))
-
-(defn render-child [this child-component]
-  (let [reconciler (p/get-reconciler this)]
-    (lajter.react/create-instance
-      reconciler
-      (p/react-class reconciler child-component)
-      (p/all-clj-props this)
-      ;; TODO: Put all-clj-props together with all-clj-routes.
-      (get-child-computed this child-component)
-      (p/all-clj-routes this)
-      (inc (p/depth this)))))
-
-(defn render-route [this route]
-  ;; TODO: Debug this.
-  ;; GET the stuff to render.
-  (let [selected-route (get (p/clj-routes this) route)
-        child-component (-> (p/spec-map this)
-                            (:lajter/routing)
-                            (get-in [route selected-route]))]
-    (if (some? child-component)
-      (render-child this child-component)
-      (log "WARN: No child component for route: " route
-           " selected-route: " selected-route
-           " routing: " (:lajter/routing (p/spec-map this))))))
-
-(defonce reconciler-atom (atom nil))
-(defn redef-reconciler [config]
-  (when-let [r @reconciler-atom]
-    (stop! r))
-  (reset! reconciler-atom (mount config)))
-
-(defn reloaded [config]
-  (log "RELOADED :D")
-  (when (or (nil? @reconciler-atom))
-    (redef-reconciler config))
-
-  (schedule-render! @reconciler-atom))
+                 (schedule-render! reconciler)))
+    reconciler))
