@@ -36,11 +36,20 @@
          (gen-with-params sym-gen)]))))
 
 (defn gen-query []
-  (->> (gen/tuple (gen-mutates "remote")
-                  (gen-mutates "local")
-                  (gen-reads "remote")
-                  (gen-reads "local"))
-       (gen/fmap #(into [] cat %))))
+  (let [query-gen (->> (gen/tuple (gen-mutates "remote")
+                                  (gen-mutates "local")
+                                  (gen-reads "remote")
+                                  (gen-reads "local"))
+                       (gen/fmap #(into [] cat %)))]
+
+    (gen/bind (s/gen (s/nilable map?))
+              (fn [params]
+                (cond->> query-gen
+                         (some? params)
+                         (gen/fmap (fn [query]
+                                     (if (empty? query)
+                                       query
+                                       (list query params)))))))))
 
 (tc.test/defspec query-generator-test
   50
@@ -81,6 +90,7 @@
                                (comp (filter #{:remote-mutates :local-mutates})
                                      (mapcat #(get m %)))
                                (keys m))
+   :layer/query-params   (second (parser/separate-query-from-params query))
    :layer/query          query})
 
 '[(remote/foo) {:query/people []}]

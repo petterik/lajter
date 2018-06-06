@@ -218,7 +218,7 @@
                                 (update :layers layer/mark-sent-layer remote-layer))))
       (log "Remote-layer: " remote-layer)
       (doseq [target (:layer.remote/targets remote-layer)]
-        (let [query (layer/to-query remote-layer target)]
+        (let [query (layer/to-remote-query remote-layer target)]
           (let [cb (fn [value]
                      (p/replace-layer! this
                                      (:layer/id remote-layer)
@@ -330,12 +330,12 @@
                      (js/setTimeout
                        #(let [remote-parse
                               (parser (assoc (p/to-env reconciler) :state remote-state)
-                                      (->> (lajt.parser/query->parsed-query query)
-                                           (map (fn [{:lajt.parser/keys [key] :as m}]
-                                                  (if (= 'foo/conj key)
-                                                    (update-in m [:lajt.parser/params :x] inc)
-                                                    m)))
-                                           (lajt.parser/parsed-query->query)))]
+                                      (lajt.parser/update-query
+                                        (map (fn [{:lajt.parser/keys [key] :as m}]
+                                               (if (= 'foo/conj key)
+                                                 (update-in m [:lajt.parser/params :x] inc)
+                                                 m)))
+                                        query))]
                           (cb (into {}
                                     (remove (comp symbol? key))
                                     remote-parse)))

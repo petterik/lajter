@@ -2,7 +2,8 @@
   (:require
     [lajter.protocols :as p]
     [lajt.parser :as parser]
-    [clojure.spec.alpha :as s]))
+    [clojure.spec.alpha :as s]
+    [clojure.set :as set]))
 
 (s/def ::remote-target keyword?)
 (s/def ::reads-only-query ::parser/read-exprs)
@@ -40,68 +41,73 @@
 (defn- read-key? [k]
   (s/valid? ::parser/read-id k))
 
-(defn- split-by [pred coll]
-  [(filter pred coll)
-   (remove pred coll)])
+(defn- filter-query [pred query]
+  (lajt.parser/update-query (filter pred) query))
+
+(defn- split-query-by [pred coll]
+  [(filter-query pred coll)
+   (filter-query (complement pred) coll)])
 
 (defn reducible-concat [& colls]
   (eduction cat colls))
 
-(defn ->remote-layer [parser remotes env parsed-query]
+(defn query-keys [query]
+  (lajt.parser/query-into
+    #{}
+    (map ::parser/key)
+    query))
+
+(defn ->remote-layer [parser remotes env query]
+  (def QUERY query)
   (let [[mutations reads]
-        (->> parsed-query
-             (split-by (comp mutation-key? ::parser/key))
-             (eduction
-               (map lajt.parser/parsed-query->query)
-               (map (fn [query]
-                      (into {}
-                            (comp
-                              (map (juxt identity (partial parser env query)))
-                              (remove (comp empty? second)))
-                            remotes)))))]
+        (->> query
+             (split-query-by (comp mutation-key? ::parser/key))
+             (map (fn [query]
+                    (into {}
+                          (comp
+                            (map (juxt identity (partial parser env query)))
+                            (remove (comp empty? second)))
+                          remotes))))]
     {:layer.remote/reads   reads
      :layer.remote/mutates mutations
      :layer.remote/targets (set (reducible-concat (keys reads)
                                                   (keys mutations)))
      :layer.remote/keys    (into #{}
-                                 (comp (mapcat parser/query->parsed-query)
-                                       (map ::parser/key))
+                                 (mapcat query-keys)
                                  (reducible-concat (vals reads)
                                                    (vals mutations)))}))
 
-(defn ->local-layer [remote-layer parsed-query]
+(defn ->local-layer [remote-layer query]
   (let [remote-mutations (:layer.remote/keys remote-layer)]
     {:layer.local/mutates
-     (into []
-           (comp (filter (fn [{::parser/keys [key]}]
-                           (and (mutation-key? key)
-                                (not (contains? remote-mutations key)))))
-                 (lajt.parser/parsed-query->query))
-           parsed-query)}))
+     (lajt.parser/update-query
+       (filter (fn [{::parser/keys [key]}]
+                 (and (mutation-key? key)
+                      (not (contains? remote-mutations key)))))
+       query)}))
 
 (defn transaction-layer
   ([reconciler tx]
    (transaction-layer (:config reconciler) (p/to-env reconciler) tx))
-  ([config env tx]
+  ([config env query]
    (let [{:keys [parser remotes]} config
-         parsed-query (lajt.parser/query->parsed-query tx)
-         remote-layer (->remote-layer parser remotes env parsed-query)
-         local-layer (->local-layer remote-layer parsed-query)]
+         remote-layer (->remote-layer parser remotes env query)
+         local-layer (->local-layer remote-layer query)]
      (-> (merge remote-layer local-layer)
-         (assoc :layer/query tx
-                :layer/mutates (into []
-                                     (comp (filter (comp mutation-key? ::parser/key))
-                                           (lajt.parser/parsed-query->query))
-                                     parsed-query))))))
+         (assoc :layer/query query
+                :layer/query-params
+                (second (lajt.parser/separate-query-from-params query))
+                :layer/mutates (lajt.parser/update-query
+                                 (filter (comp mutation-key? ::parser/key))
+                                 query))))))
 
 (defn with-id [layer tx-id]
   (assoc layer :layer/id tx-id))
 
 (defn with-query-params [layer query-params]
-  {:pre [(or (empty? query-params) (map? query-params))]}
-  (assoc layer :layer/query-env query-params))
+  (update layer :layer/query-params #(merge-with merge % query-params)))
 
-(defn to-query [layer target]
+(defn to-remote-query [layer target]
   (cond-> (into (get-in layer [:layer.remote/mutates target] [])
                 (get-in layer [:layer.remote/reads target]))
           (seq (:layer/query-params layer))
