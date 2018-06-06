@@ -3,14 +3,14 @@
     [clojure.test]
     [lajter.core-test]
     [lajter.layer-test]
-    [expound.alpha]
+    [expound.alpha :as expound]
     [clojure.spec.alpha :as s]
     [clojure.spec.test.alpha :as st]))
 
 (s/check-asserts true)
-(set! s/*explain-out* expound.alpha/printer)
+(set! s/*explain-out* expound/printer)
 
 (defn -main [& args]
-  (clojure.test/run-all-tests #"lajt.*"))
+  (clojure.test/run-all-tests #"lajter.*"))
 
 (st/instrument)

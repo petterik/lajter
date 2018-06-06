@@ -9,7 +9,8 @@
   (schedule-render! [this])
   (schedule-sends! [this])
   (send! [this])
-  (select-route [this route-data]))
+  (select-route [this route-data])
+  (query-params [this]))
 
 (defprotocol IIndexer
   (index-component! [this component])

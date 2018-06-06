@@ -294,10 +294,8 @@
   "Returns the keys of the component's query."
   [spec]
   (into #{}
-        (comp
-          (lajt.parser/query->parsed-query)
-          (map :lajt.parser/key))
-        (:lajter/query spec)))
+        (map :lajt.parser/key)
+        (lajt.parser/query->parsed-query (:lajter/query spec))))
 
 (defn- create-react-class [methods statics]
   #?(:clj

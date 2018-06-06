@@ -64,8 +64,7 @@
      :layer.remote/targets (set (reducible-concat (keys reads)
                                                   (keys mutations)))
      :layer.remote/keys    (into #{}
-                                 (comp cat
-                                       (parser/query->parsed-query)
+                                 (comp (mapcat parser/query->parsed-query)
                                        (map ::parser/key))
                                  (reducible-concat (vals reads)
                                                    (vals mutations)))}))
@@ -97,6 +96,16 @@
 
 (defn with-id [layer tx-id]
   (assoc layer :layer/id tx-id))
+
+(defn with-query-params [layer query-params]
+  {:pre [(or (empty? query-params) (map? query-params))]}
+  (assoc layer :layer/query-env query-params))
+
+(defn to-query [layer target]
+  (cond-> (into (get-in layer [:layer.remote/mutates target] [])
+                (get-in layer [:layer.remote/reads target]))
+          (seq (:layer/query-params layer))
+          (list (:layer/query-params layer))))
 
 (defn db-with-layers [reconciler db layers]
   (let [{:keys [parser] :as env} (p/to-env reconciler)

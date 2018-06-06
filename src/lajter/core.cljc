@@ -129,7 +129,8 @@
   (let [reconciler (p/get-reconciler x)
         tx-id (gen-tx-id!)
         layer (-> (layer/transaction-layer reconciler query)
-                  (layer/with-id tx-id))]
+                  (layer/with-id tx-id)
+                  (layer/with-query-params (p/query-params reconciler)))]
     (p/add-layer! reconciler layer)
     (if (seq (:layer.remote/targets layer))
       (schedule-sends! reconciler)
@@ -217,8 +218,7 @@
                                 (update :layers layer/mark-sent-layer remote-layer))))
       (log "Remote-layer: " remote-layer)
       (doseq [target (:layer.remote/targets remote-layer)]
-        (let [query (into (get-in remote-layer [:layer.remote/mutates target] [])
-                          (get-in remote-layer [:layer.remote/reads target]))]
+        (let [query (layer/to-query remote-layer target)]
           (let [cb (fn [value]
                      (p/replace-layer! this
                                      (:layer/id remote-layer)
@@ -228,9 +228,12 @@
                      (schedule-sends! this))]
             ((:send-fn config) this cb query target))))))
   (select-route [this route-data]
-    ((:route-fn config)
-      (p/to-env this)
-      route-data)))
+    (when-let [f (:route-fn config)]
+      (f (p/to-env this)
+         route-data)))
+  (query-params [this]
+    (when-let [f (:query-param-fn config)]
+      (f (p/to-env this)))))
 
 (defn- update-index [index index-keys-fn f component]
   (reduce (fn [index query-key]
@@ -327,8 +330,7 @@
                      (js/setTimeout
                        #(let [remote-parse
                               (parser (assoc (p/to-env reconciler) :state remote-state)
-                                      (->> query
-                                           (lajt.parser/query->parsed-query)
+                                      (->> (lajt.parser/query->parsed-query query)
                                            (map (fn [{:lajt.parser/keys [key] :as m}]
                                                   (if (= 'foo/conj key)
                                                     (update-in m [:lajt.parser/params :x] inc)
@@ -342,6 +344,8 @@
                    (merge db value))
         route-fn (fn [env {:lajter.routing/keys [route choices]}]
                    (get-in @(:state env) [:routing route]))
+        query-param-fn (fn [env]
+                         {:routes (:routing @(:state env))})
 
         r (->Reconciler
             (assoc config
@@ -349,6 +353,7 @@
               :send-fn send-fn
               :merge-fn merge-fn
               :route-fn route-fn
+              :query-param-fn query-param-fn
               :indexer (indexer)
               :optimize  #(sort-by p/depth %))
             (atom {}))]
