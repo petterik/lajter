@@ -4,19 +4,16 @@ The intent of this library is to address some problems creating a fullstack sing
 
 I think om.next has great ideas and I want to make it easier to use them.
 
-Problems I had:
+Problems I had building an application with om.next - in no particular order:
 * Figuring out how to compose component's queries.
 * Figuring out why my component wasn't re-rendering.
 * Figuring out how to get routing to work.
-* Figuring out what to do about optimistic updates.
+* Figuring out how to do optimistic updates.
 * Figuring out which features to stay away from.
+* Figuring out how to provide feedback to users with how their action went.
 * Realizing why I didn't get all the data I needed from the server.
 
-Before I explain these problems and how I've solved them in lajter, here's an overview of the differences between lajter and om.next:
-* Kept in:
-  * Structure: Reconciler, Parser, Indexer, Send, Merge
-  * Server side rendering (wip)
-  * Shared (wip)
+We eventually solved all these problems for ourselves, but it wasn't easy. Before I explain more about these problems (and how I've solved them in lajter) here's an overview of the differences between lajter and om.next:
 * Left out:
   * QueryParams
   * Sub queries
@@ -30,6 +27,10 @@ Before I explain these problems and how I've solved them in lajter, here's an ov
   * Optimistic mutation rollback (Layers)
   * Remote queries with contexts
   * Remote query resolver (mostly useful for datalog queries)
+  * Remote response handling
+* Kept in:
+  * Structure: Reconciler, Parser, Indexer, Send, Merge, Shared
+  * Server side rendering (wip)
 
 I personally use datascript, which makes it easy to merge data into the app-state. If you'd want to use om.next's db-format, please let me know so we can make sure there are enough hooks to plug those pieces in.
 
@@ -72,6 +73,18 @@ This is something everyone might not like :)
 ## Remote queries with context
 
 Queries have context on the client. They should be executed in the same context on the server.
+
+## Remote response handling
+
+In traditional UI development, where each component is responsible for requesting data from an endpoint, you have very granular control of how to handle the request and possibly view it to the user. This is all lost when transitioning to om.next. You have to make it up as you go along.
+
+Lajter provides a way to access return values from the remote mutations, where you can place user facing messages or any other data that makes it possible for the UI to display feedback to the user.
+
+Sometimes it's also necessary to show loading spinners whenever a request is in flight and one is waiting for the user. With om.next, there's no way to tell whether a read returned no data because there simply is no data, or the read returned no data because the request hasn't received a response yet.
+
+With lajter, you have a log of all your requests and you can quickly check if a read has been sent and whether it has gotten a response yet.
+
+TODO: Code examples.
 
 ## Remote query resolver
 
