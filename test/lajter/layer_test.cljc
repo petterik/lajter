@@ -207,16 +207,6 @@
     ))
 
 (comment
-  (def remove-gem '[({:layer.local/mutates [], :layer/id 2} {:layer.local/mutates [], :layer/id 12} {:layer.local/mutates [], :layer/id 3} {:layer.local/mutates [], :layer/id 4} {:layer.local/mutates [], :layer/id 5} {:layer.snapshot/db {}, :layer/id 1} {:layer.local/mutates [], :layer/id 6} {:layer.local/mutates [], :layer/id 7}) {:layer.local/mutates [], :layer/id 12}])
-
-  (def top-layer-args '[({:layer.local/mutates [], :layer/id 1} {:layer.local/mutates [], :layer/id 2}) (#:layer.snapshot{:db {}} #:layer.snapshot{:db {}})])
-  (def layers '[])
-  (def snap1 (first (second top-layer-args)))
-  (def snap2 (second (second top-layer-args)))
-  (-> layers)
-
-  (-> layer/LAYERS)
-  (split-with (complement layer/remote-layer?) (rseq (-> layer/LAYERS)))
 
   (parser {} '[:remote/foo :remote/foo] :remote)
   (layer/->remote-layer parser
