@@ -1,9 +1,12 @@
 (ns lajter.layer
   (:require
     [lajter.protocols :as p]
+    [lajter.logger :refer [log]]
     [lajt.parser :as parser]
     [clojure.spec.alpha :as s]
-    [clojure.set :as set]))
+    [clojure.set :as set]
+
+    [clojure.data :as data]))
 
 (s/def ::remote-target keyword?)
 (s/def ::reads-only-query ::parser/read-exprs)
@@ -15,6 +18,7 @@
 (s/def :layer.local/mutates ::mutations-only-query)
 (s/def :layer.merge/value any?)
 (s/def :layer/id uuid?)
+(s/def :layer.snapshot/db any?)
 ;; Convenience
 (s/def :layer.remote/keys (s/coll-of (s/or :mutate symbol? :read keyword?) :kind set?))
 (s/def :layer.remote/targets (s/coll-of ::remote-target :kind set?))
@@ -24,6 +28,7 @@
                                      :layer.merge/value
                                      :layer.remote/reads)]
                            :opt [:layer/id
+                                 :layer.snapshot/db
                                  :layer.remote/keys
                                  :layer.remote/targets]))
 
@@ -34,6 +39,9 @@
                  :layer.remote/mutates
                  :layer.remote/keys
                  :layer.remote/reads)))
+
+(defn ->snapshot-layer [db]
+  {:layer.snapshot/db db})
 
 (defn- mutation-key? [k]
   (s/valid? ::parser/mutation-id k))
@@ -58,7 +66,6 @@
     query))
 
 (defn ->remote-layer [parser remotes env query]
-  (def QUERY query)
   (let [[mutations reads]
         (->> query
              (split-query-by (comp mutation-key? ::parser/key))
@@ -113,7 +120,7 @@
           (seq (:layer/query-params layer))
           (list (:layer/query-params layer))))
 
-(defn db-with-layers [reconciler db layers]
+(defn db-with-layers [db reconciler layers]
   (let [{:keys [parser] :as env} (p/to-env reconciler)
         mutate-db (fn [db query]
                     (if (empty? query)
@@ -144,17 +151,47 @@
 (defn replace-layer [layers layer-id with-layer]
   (update-layer layers layer-id (constantly with-layer)))
 
+(defn init-layers []
+  [])
+
 (defn add-layer [layers layer]
   (conj (or layers []) layer))
 
 (def remote-layer? (comp seq :layer.remote/targets))
-(def local-layer? (comp empty? :layer.remote/targets))
 
-(defn leading-local-layers [layers]
-  (take-while local-layer? layers))
+(defn take-until [pred coll]
+  (transduce (halt-when pred (fn [r h] (conj r h)))
+             conj
+             []
+             coll))
 
-(defn drop-layers [layers layers-to-drop]
-  (into [] (drop (count layers-to-drop)) layers))
+
+(defn top-layers
+  "Returns layers on top of the latest snapshot"
+  [layers]
+  (let [ls (take-until (comp some? :layer.snapshot/db) (rseq layers))
+        snapshot (peek ls)
+        layers (rseq (pop ls))]
+    {:layers   layers
+     :snapshot snapshot}))
+
+(defn remove-snapshots-after [layers layer-id]
+  (let [[before [found & after]]
+        (split-with (complement (comp #{layer-id} :layer/id)) layers)]
+    (-> (into [] before)
+        (cond-> (some? found) (conj found))
+        (into (remove #(contains? % :layer.snapshot/db)) after))))
+
+(comment
+  (require '[clojure.spec.gen.alpha :as gen])
+  (def layers (into [] (gen/sample (s/gen ::layer-map))))
+
+  (count layers)
+  (some #(when (:layer.snapshot/db %) %) layers)
+
+
+
+  )
 
 (defn first-remote-unsent [layers]
   (first

@@ -169,8 +169,7 @@
                   (layer/with-query-params (p/query-params reconciler)))]
     (p/add-layer! reconciler layer)
     (if (seq (:layer.remote/targets layer))
-      (schedule-sends! reconciler)
-      (p/squash-local-layers! reconciler))
+      (schedule-sends! reconciler))
     (schedule-render! reconciler)))
 
 (defrecord Reconciler [config state]
@@ -188,15 +187,16 @@
     (swap! state #(-> (update % :layers layer/add-layer layer)
                       (update :t (fnil inc 0)))))
   (replace-layer! [this layer-id with-layer]
-    (swap! state #(-> %
-                      (update :layers
-                              layer/replace-layer layer-id with-layer)
-                      (update :t (fnil inc 0)))))
-  (squash-local-layers! [this]
-    (let [layers (:layers @state)]
-      (when-let [local-layers (seq (layer/leading-local-layers layers))]
-        (swap! (:state config) #(layer/db-with-layers this % local-layers))
-        (swap! state update :layers layer/drop-layers local-layers))))
+    (let [layers-update
+          ;; Remove snapshots that are based on remote layers.
+          ;; TODO: Should we really just remove snapshots
+          ;; that are based on layers until this point?
+          ;; Should be the same?
+          (comp #(layer/replace-layer % layer-id with-layer)
+                #(layer/remove-snapshots-after % layer-id))]
+      (swap-vals! state #(-> %
+                             (update :layers layers-update)
+                             (update :t (fnil inc 0))))))
 
   p/IBasis
   (basis-t [this] (:t @state))
@@ -210,10 +210,20 @@
   (reconcile! [this]
     (swap! state dissoc :scheduled-render?)
     (let [{:keys [parser root-render target indexer root-component]} config
-          db (deref (:state config))
-          {:keys [layers root-element] :or {layers []}} @state
-          _ (log "layers: " {:layers layers})
-          db (layer/db-with-layers this db layers)
+
+
+          {:keys [root-element] :as curr-state} @state
+          _ (log "layers: " (:layers curr-state))
+          {:keys [snapshot layers]} (layer/top-layers (:layers curr-state))
+          db (cond-> (:layer.snapshot/db snapshot)
+                     (seq layers)
+                     (layer/db-with-layers this layers))
+          ;; when there are layers on top of the snapshot, make
+          ;; a new snapshot and (if prod) remove the previous snapshots.
+          _ (when (seq layers)
+              (let [new-snapshot (layer/->snapshot-layer db)]
+                (swap! state update :layers layer/add-layer new-snapshot)))
+
           env (assoc (p/to-env this) :state (atom db) :db db)
           root-class (p/react-class this root-component)
           all-props (parser env (get-full-query this root-class))
@@ -259,7 +269,6 @@
                      (p/replace-layer! this
                                      (:layer/id remote-layer)
                                      (layer/->merge-layer remote-layer value))
-                     (p/squash-local-layers! this)
                      (schedule-render! this)
                      (schedule-sends! this))]
             ((:send-fn config) this cb query target))))))
@@ -350,6 +359,10 @@
                      (ex-info
                        "No :parser, :read or :mutate passed in config"
                        {:config config})))
+        ;; TODO: Add this to reconciler component/start
+        layers (-> (layer/init-layers)
+                   (layer/add-layer
+                     (layer/->snapshot-layer @(:state config))))
         reconciler (->Reconciler
                      (assoc config
                        :parser parser
@@ -359,7 +372,7 @@
                        :query-param-fn query-param-fn
                        :indexer indexer
                        :optimize optimize)
-                     (atom {}))]
+                     (atom {:layers layers}))]
     ;; TODO: Add to lifecycle component/start
     (add-watch (:state config) ::reconciler
                (fn [k ref old-state new-state]

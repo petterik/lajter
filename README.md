@@ -28,6 +28,7 @@ We eventually solved all these problems for ourselves, but it wasn't easy. Befor
   * Remote queries with contexts
   * Remote query resolver (mostly useful for datalog queries)
   * Remote response handling
+  * Place for creating "computed" functions
 * Kept in:
   * Structure: Reconciler, Parser, Indexer, Send, Merge, Shared
   * Server side rendering (wip)

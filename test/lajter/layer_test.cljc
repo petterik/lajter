@@ -93,8 +93,6 @@
    :layer/query-params   (second (parser/separate-query-from-params query))
    :layer/query          query})
 
-'[(remote/foo) {:query/people []}]
-
 (defn- m->query [m]
   (into [] cat (vals m)))
 
@@ -120,7 +118,105 @@
       (assoc base :remote-mutates '[(remote/B) (remote/B)])
       (assoc base :remote-reads [:remote/? :remote/?]))))
 
+(s/def ::query-mutates (s/coll-of ::parser/mutation-expr :kind vector?))
+
+(defn gen-local-layer []
+  (gen/hash-map :layer.local/mutates (s/gen ::query-mutates)))
+
+(defn gen-merge-layer []
+  (gen/hash-map :layer.merge/value (s/gen map?)))
+
+(s/def ::set-of-keys (s/coll-of keyword? :kind set?))
+
+(defn gen-remote-layer []
+  (->> (gen/hash-map
+         :layer.remote/keys (s/gen ::set-of-keys)
+         :layer.remote/mutates (s/gen ::query-mutates)
+         :layer.remote/reads (s/gen ::parser/read-exprs)
+         :layer.remote/targets (s/gen ::set-of-keys))
+       (gen/such-that #(every? (comp seq val) %))))
+
+(defn gen-snapshot-layer []
+  (gen/hash-map :layer.snapshot/db (s/gen map?)))
+
+(defn gen-layer-ids []
+  (gen/vector-distinct (s/gen pos-int?)))
+
+(defn gen-layers
+  ([] (gen-layers #{}))
+  ([exclusions]
+   (-> (gen/one-of
+         (into []
+               (comp (remove (set exclusions))
+                     (map (fn [gen] (gen))))
+               [gen-local-layer
+                gen-merge-layer
+                gen-snapshot-layer
+                gen-remote-layer]))
+       (gen/vector)
+       (gen/bind (fn [layers]
+                   (gen/fmap
+                     (fn [ids]
+                       (map #(layer/with-id % %2) layers ids))
+                     (gen/such-that #(<= (count layers) (count %))
+                                    (gen-layer-ids)
+                                    100)))))))
+
+(defn gen-take [n gen]
+  (gen/fmap (partial take n)
+            (gen/such-that #(<= n (count %)) gen 100)))
+
+(defn one [gen]
+  (gen/fmap first (gen/not-empty gen)))
+
+(defn at-least [n gen]
+  (gen/such-that #(<= n (count %)) gen))
+
+(defn naive-remove-snapshots [layers]
+  (remove #(contains? % :layer.snapshot/db) layers))
+
+(tc.test/defspec remote-snapshot-after=>removes-snapshots-after-a-certain-layer
+  30
+  (prop/for-all [layers (gen-layers)
+                 layer (one (gen-layers #{gen-snapshot-layer}))]
+    (let [layer (layer/with-id layer "non-colliding-id")]
+      (and
+        (every? pos-int? (map :layer/id layers))
+        (= (concat layers [layer] (naive-remove-snapshots layers))
+           (layer/remove-snapshots-after
+             (concat layers [layer] layers)
+             (:layer/id layer)))))))
+
+(tc.test/defspec top-layers=>layers-until-the-latest-snapshot
+  30
+  (prop/for-all [layers1 (gen-layers #{gen-snapshot-layer})
+                 layers2 (gen-layers #{gen-snapshot-layer})
+                 snap1 (gen-snapshot-layer)
+                 snap2 (gen-snapshot-layer)]
+    (= {:layers (seq layers2) :snapshot snap2}
+       (layer/top-layers (vec (concat layers1 [snap1] layers1 [snap2] layers2))))))
+
+(deftest top-layers-examples
+  (are [layer1 layer2 snap1 snap2]
+       (= {:layers (seq layer2) :snapshot snap2}
+          (layer/top-layers (vec (concat layer1 [snap1] layer1 [snap2] layer2))))
+    () '({:layer.local/mutates [], :layer/id 1})
+    #:layer.snapshot{:db {}} #:layer.snapshot{:db {}}
+
+    () () #:layer.snapshot{:db {}} #:layer.snapshot{:db {}}
+    ))
+
 (comment
+  (def remove-gem '[({:layer.local/mutates [], :layer/id 2} {:layer.local/mutates [], :layer/id 12} {:layer.local/mutates [], :layer/id 3} {:layer.local/mutates [], :layer/id 4} {:layer.local/mutates [], :layer/id 5} {:layer.snapshot/db {}, :layer/id 1} {:layer.local/mutates [], :layer/id 6} {:layer.local/mutates [], :layer/id 7}) {:layer.local/mutates [], :layer/id 12}])
+
+  (def top-layer-args '[({:layer.local/mutates [], :layer/id 1} {:layer.local/mutates [], :layer/id 2}) (#:layer.snapshot{:db {}} #:layer.snapshot{:db {}})])
+  (def layers '[])
+  (def snap1 (first (second top-layer-args)))
+  (def snap2 (second (second top-layer-args)))
+  (-> layers)
+
+  (-> layer/LAYERS)
+  (split-with (complement layer/remote-layer?) (rseq (-> layer/LAYERS)))
 
   (parser {} '[:remote/foo :remote/foo] :remote)
   (layer/->remote-layer parser

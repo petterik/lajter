@@ -132,7 +132,7 @@
                      (swap! (:state env) update :bar #(dissoc % (first (keys %)))))))
         app-state (atom {:routing {:navbar :route.navbar/a
                                    :body   :route.body/a}
-                         :foo     [1 2 3 4]
+                         :foo     [1]
                          :bar     {:a :b}
                          :baz     "foo"})
         remote-state (atom @app-state)
