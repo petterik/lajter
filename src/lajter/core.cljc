@@ -152,8 +152,7 @@
 
 (defn schedule-sends! [reconciler]
   (when (p/schedule-sends! reconciler)
-    #?(:cljs
-       (p/send! reconciler))))
+    (p/send! reconciler)))
 
 (defn- gen-tx-id! []
   #?(:cljs (random-uuid)
@@ -172,17 +171,37 @@
     (schedule-render! reconciler)))
 
 (defn latest-db-from-layers! [reconciler env]
-  (let [state (:state reconciler)
-        {:keys [snapshot layers]} (layer/top-layers (:layers @state))
+  (let [#?@(:clj  [id (java.util.UUID/randomUUID)]
+            :cljs [id (random-uuid)])
+        _ (log "will get top-layers: " id)
+        state (:state reconciler)
+        current-state @state
+        {:keys [snapshot layers] :as top-layers}
+        (layer/top-layers (:layers current-state))
         db (cond-> (:layer.snapshot/db snapshot)
                    (seq layers)
                    (layer/db-with-layers reconciler env layers))]
+    (log "got top-layers: " id " " top-layers)
     ;; when there are layers on top of the snapshot, make
     ;; a new snapshot and (if prod) remove the previous snapshots.
-    (when (seq layers)
-             (let [new-snapshot (layer/->snapshot-layer db)]
-               (swap! state update :layers layer/add-layer new-snapshot)))
-    db))
+    (if (seq layers)
+      (let [new-snapshot (layer/->snapshot-layer db)
+            new-state (update current-state :layers layer/add-layer new-snapshot)
+            success? (compare-and-set! state current-state new-state)]
+        ;; GROSS GROSS GROSS
+        ;; TODO: this has to be cleaned up.
+        ;; Think about it. Snapshots don't actually add anything to the layers
+        ;; It's just a caching mechanism.
+        ;; Should it go onto the same datastructure as the actual layers?
+        ;; Should it be calculated when env is trying to be gotten?
+        ;; Don't think so.
+        ;; Think about this.
+        ;; (make Layers it's own thing to isolate the whole thing?)
+        ;; Separate the functions and effects. Come on now.
+        (if success?
+          db
+          (recur reconciler env)))
+      db)))
 
 (defrecord Reconciler [config state]
   p/IHasReconciler
@@ -216,7 +235,8 @@
                 #(layer/remove-snapshots-after % layer-id))]
       (swap-vals! state #(-> %
                              (update :layers layers-update)
-                             (update :t (fnil inc 0))))))
+                             (update :t (fnil inc 0))))
+      (log "replaced layer: " with-layer)))
 
   p/IBasis
   (basis-t [this] (:t @state))
@@ -360,41 +380,47 @@
                {:fn-key    :route-fn
                 :arguments '[env {:lajter.routing/keys [route choices]}]}))))
 
-(defn mount [{:keys [parser send-fn merge-fn route-fn
-                     query-param-fn indexer optimize]
-              :or {send-fn (fn [reconciler cb query target])
-                   merge-fn (fn [reconciler db value tx-info])
-                   route-fn default-route-fn
-                   query-param-fn (fn [env])
-                   indexer (indexer)
-                   optimize #(sort-by p/depth %)}
-              :as config}]
-  (let [parser (or parser
-                   (when (or (:read config) (:mutate config))
-                     (lajt.parser/parser
-                       (merge
-                         {:lajt.parser/query-plugins [(lajt.parser/dedupe-query-plugin {})]}
-                         config)))
-                   (throw
-                     (ex-info
-                       "No :parser, :read or :mutate passed in config"
-                       {:config config})))
-        ;; TODO: Add this to reconciler component/start
-        layers (-> (layer/init-layers)
-                   (layer/add-layer
-                     (layer/->snapshot-layer @(:state config))))
-        reconciler (->Reconciler
-                     (assoc config
-                       :parser parser
-                       :send-fn send-fn
-                       :merge-fn merge-fn
-                       :route-fn route-fn
-                       :query-param-fn query-param-fn
-                       :indexer indexer
-                       :optimize optimize)
-                     (atom {:layers layers}))]
-    ;; TODO: Add to lifecycle component/start
-    (add-watch (:state config) ::reconciler
-               (fn [k ref old-state new-state]
-                 (schedule-render! reconciler)))
-    reconciler))
+(defn mount
+  ([config root]
+   (mount config root nil))
+  ([{:keys [parser send-fn merge-fn route-fn
+            query-param-fn indexer optimize]
+     :or   {send-fn        (fn [reconciler cb query target])
+            merge-fn       (fn [reconciler db value tx-info])
+            route-fn       default-route-fn
+            query-param-fn (fn [env])
+            indexer        (indexer)
+            optimize       #(sort-by p/depth %)}
+     :as   config}
+    root target]
+   (let [parser (or parser
+                    (when (or (:read config) (:mutate config))
+                      (lajt.parser/parser
+                        (merge-with into
+                                    {:lajt.parser/query-plugins [(lajt.parser/dedupe-query-plugin {})]}
+                                    config)))
+                    (throw
+                      (ex-info
+                        "No :parser, :read or :mutate passed in config"
+                        {:config config})))
+         ;; TODO: Add this to reconciler component/start
+         layers (-> (layer/init-layers)
+                    (layer/add-layer
+                      (layer/->snapshot-layer @(:state config))))
+         reconciler (->Reconciler
+                      (assoc config
+                        :root-component root
+                        :target target
+                        :parser parser
+                        :send-fn send-fn
+                        :merge-fn merge-fn
+                        :route-fn route-fn
+                        :query-param-fn query-param-fn
+                        :indexer indexer
+                        :optimize optimize)
+                      (atom {:layers layers}))]
+     ;; TODO: Add to lifecycle component/start
+     (add-watch (:state config) ::reconciler
+                (fn [k ref old-state new-state]
+                  (schedule-render! reconciler)))
+     reconciler)))

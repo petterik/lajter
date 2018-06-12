@@ -1,5 +1,8 @@
 (ns lajter.logger)
 
+(defonce lock (Object.))
+
 (defn log [& args]
   #?(:cljs (.apply (.-log js/console) nil (into-array args))
-     :clj (apply prn args)))
+     :clj  (locking lock
+             (apply prn args))))

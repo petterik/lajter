@@ -99,21 +99,13 @@
        (dom/p nil "BODY: ")
        (la/render-route this :body)))})
 
-
 (defonce reconciler-atom (atom nil))
-(defn redef-reconciler [config]
-  (when-let [r @reconciler-atom]
-    (la/stop! r))
-  (reset! reconciler-atom (la/mount config)))
-
-(defn reloaded [config]
-  (log "RELOADED :D")
-  (when (or (nil? @reconciler-atom))
-    (redef-reconciler config))
-
-  (la/schedule-render! @reconciler-atom))
 
 (defn ^:after-load runit! []
+  (when-let [r @reconciler-atom]
+    (la/stop! r)
+    (reset! reconciler-atom nil))
+
   (let [mutate (fn [env k p]
                  (if (:target env)
                    (when (= "foo" (namespace k))
@@ -153,9 +145,7 @@
                                  (remove (comp symbol? key))
                                  remote-parse)))
                     2000))
-        config {:root-component Router
-                :root-render    react-dom/render
-                :target         (.getElementById js/document "app")
+        config {:root-render    react-dom/render
                 :remotes        [:remote]
                 :state          app-state
                 :read           (lajt.read/->read-fn
@@ -165,16 +155,17 @@
                                   {})
                 :mutate         mutate
                 :send-fn        send-fn
-                :merge-fn       (fn [reconciler db value tx-info]
-                                  (merge db value))
+                :merge-fn       (fn [reconciler env value]
+                                  (merge (:db env) value))
                 :route-fn       (fn [env {:lajter.routing/keys
                                           [route choices]}]
                                   (get-in @(:state env) [:routing route]))
                 :query-param-fn (fn [env]
-                                  {:routes (:routing @(:state env))})}]
+                                  {:routes (:routing @(:state env))})}
+        reconciler (la/mount config Router (.getElementById js/document "app"))]
 
-    (reset! reconciler-atom nil)
-    (reloaded config)))
+    (reset! reconciler-atom reconciler)
+    (la/schedule-render! reconciler)))
 
 (defn -main [& args]
   (enable-console-print!)

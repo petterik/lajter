@@ -129,7 +129,10 @@
                         (parser (assoc env :state state :db db) query)
                         @state)))
         merge-db (fn [db to-merge]
-                   ((:merge-fn (p/get-config reconciler)) reconciler db to-merge nil))
+                   ((p/get-config reconciler :merge-fn)
+                     reconciler
+                     (assoc env :state (atom db) :db db)
+                     to-merge))
         apply-layer (fn [db layer]
                       ;; If the layer contains something to merge.
                       ;; Apply the local mutations then call merge.
