@@ -95,7 +95,7 @@
 
 (defn transaction-layer
   ([reconciler tx]
-   (transaction-layer (:config reconciler) (p/to-env reconciler) tx))
+   (transaction-layer (p/get-config reconciler) (p/to-env reconciler) tx))
   ([config env query]
    (let [{:keys [parser remotes]} config
          remote-layer (->remote-layer parser remotes env query)
@@ -120,16 +120,16 @@
           (seq (:layer/query-params layer))
           (list (:layer/query-params layer))))
 
-(defn db-with-layers [db reconciler layers]
-  (let [{:keys [parser] :as env} (p/to-env reconciler)
-        mutate-db (fn [db query]
+(defn db-with-layers [db reconciler env layers]
+  (let [mutate-db (fn [db query]
                     (if (empty? query)
                       db
-                      (let [state (atom db)]
+                      (let [state (atom db)
+                            parser (:parser env)]
                         (parser (assoc env :state state :db db) query)
                         @state)))
         merge-db (fn [db to-merge]
-                   ((:merge-fn (:config reconciler)) reconciler db to-merge nil))
+                   ((:merge-fn (p/get-config reconciler)) reconciler db to-merge nil))
         apply-layer (fn [db layer]
                       ;; If the layer contains something to merge.
                       ;; Apply the local mutations then call merge.

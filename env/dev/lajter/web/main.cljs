@@ -37,10 +37,10 @@
   {:lajter/id       :lajter.web.main/ComponentA
    :lajter/children [ComponentB]
    :lajter/query    [:foo {:bar [:a]}]
-   :lajter/computed {ComponentB
-                     (fn [parent]
+   :lajter/computed (fn [parent]
+                      {ComponentB
                        {:update-parent
-                        #(la/update-state! parent update :counter inc)})}
+                        #(la/update-state! parent update :counter inc)}})
    :displayName     "lajter.web.main/ComponentA"
    :render          (fn [this props state]
                       (dom/div

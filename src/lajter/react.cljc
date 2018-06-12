@@ -93,6 +93,8 @@
                                   (f (p/clj-state state)))))))
        (depth [this]
          (get-js-prop this "lajter$depth"))
+       (force-update! [this]
+         (.forceUpdate this))
        p/IHasReconciler
        (get-reconciler [this]
          (get-js-prop this "lajter$reconciler"))
@@ -205,14 +207,14 @@
    (fn [f]
      (fn [this]
        (let [reconciler (p/get-reconciler this)
-             indexer (-> reconciler :config :indexer)]
+             indexer (p/get-config reconciler :indexer)]
          (p/index-component! indexer this)
          (f this))))
    :componentWillUnmount
    (fn [f]
      (fn [this]
        (let [reconciler (p/get-reconciler this)
-             indexer (-> reconciler :config :indexer)]
+             indexer (p/get-config reconciler :indexer)]
          (p/drop-component! indexer this)
          (f this))))
    :render
@@ -312,17 +314,59 @@
        (set-all! ctor statics)
        ctor)))
 
+#?(:clj
+   (defn create-element-clj [spec props]
+     (let [{:keys [getDerivedStateFromProps]} spec
+           state-atom (atom {})
+           unwrapped (unwrap (:lajter$wrapped-props props))
+           elem (reify
+                  p/IHasReconciler
+                  (get-reconciler [this] (:lajter$reconciler props))
+                  p/ILajterClass
+                  (spec-map [this] spec)
+                  p/IBasis
+                  (basis-t [this]
+                    (props-basis-t (:lajter$wrapped-props props)))
+                  p/IReactElement
+                  (depth [this] (:lajter$depth props))
+                  (all-clj-props [this] (:all-props unwrapped))
+                  (all-clj-routes [this] (:all-routes unwrapped))
+                  (clj-props [this]
+                    (:props unwrapped))
+                  (clj-routes [this]
+                    (:routes unwrapped))
+                  (clj-computed [this]
+                    (:lajter$clj-computed props))
+                  (clj-state [this]
+                    @state-atom)
+                  (update-clj-state! [this f]
+                    (swap! state-atom f))
+                  (force-update! [this]))]
+       (when (some? getDerivedStateFromProps)
+         (swap! state-atom
+                 #(getDerivedStateFromProps elem (p/clj-props elem) %)))
+       elem)))
+
 (defn create-class [class-spec]
   (let [spec (assoc class-spec :lajter.query/keys (query-keys class-spec))
         methods (wrap-spec method-wrappers (into default-methods spec))
         statics (wrap-spec static-wrappers spec)]
-    (let [klass (create-react-class methods statics)
-          ;; TODO: Un hardcode this.
-          #?@(:cljs [klass (doto klass
-                             (specify!
-                               p/ILajterClass
-                               (spec-map [_] spec)))])]
-      klass)))
+    (let [klass (create-react-class methods statics)]
+      #?(:cljs
+         (doto klass
+           (specify!
+             p/ILajterClass
+             (spec-map [_] spec)
+             p/IReactClass
+             (create-element [this props]
+               (react/createElement this props))))
+         :clj
+         (reify
+           p/ILajterClass
+           (spec-map [_] spec)
+           p/IReactClass
+           (create-element [this props]
+             (create-element-clj spec props)))))))
 
 (defn- select-props [spec props]
   (select-keys props (:lajter.query/keys spec)))
@@ -330,8 +374,8 @@
 (defn- select-routes [spec routes]
   (select-keys routes (keys (:lajter/routing spec))))
 
-(defn create-instance
-  [reconciler klass props computed routes depth]
+(defn create-element
+  [klass reconciler depth props routes computed]
   (let [spec (p/spec-map klass)
         clj-props (select-props spec props)
         clj-routes (select-routes spec routes)
@@ -340,14 +384,13 @@
                                :props      clj-props
                                :routes     clj-routes}
                               (p/basis-t reconciler))]
-    #?(:cljs
-       (react/createElement
-         klass
-         #js {:lajter$wrapped-props wrapped
-              :lajter$reconciler    reconciler
-              :lajter$react-class   klass
-              :lajter$clj-computed  computed
-              :lajter$depth         depth}))))
+    (p/create-element
+      klass
+      #js {:lajter$wrapped-props wrapped
+           :lajter$reconciler    reconciler
+           :lajter$react-class   klass
+           :lajter$clj-computed  computed
+           :lajter$depth         depth})))
 
 (defn update-component!
   [reconciler component props routes]
@@ -383,10 +426,21 @@
            (gobj/set state "lajter$state$wrapped-props"
                      (gobj/get next-state "lajter$state$wrapped-props")))
          (if should-update?
-           (.forceUpdate ^js/React.Component component)
+           (p/force-update! ^js/React.Component component)
            (lajter.logger/log "Avoided render when updating component."))))))
 
 ;; Put props in both props and state.
 ;; Place an incrementing basis-t in the props
 ;; In componentWillUpdate: merge pending props and state.
 ;; - Merge pending means to ...?
+
+#?(:clj
+   (defn call-render [elem]
+     ((:render (p/spec-map elem)) elem
+       (p/clj-props elem)
+       (p/clj-state elem))))
+
+#?(:clj
+   (defn render-to-string [elem]
+     (let [render-fn (p/get-config (p/get-reconciler elem) :root-render)]
+       (render-fn (call-render elem)))))

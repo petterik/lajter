@@ -8,6 +8,7 @@
   (react-class [this component-spec])
   (schedule-render! [this])
   (schedule-sends! [this])
+  (get-config [this] [this k])
   (send! [this])
   (select-route [this route-data])
   (query-params [this]))
@@ -24,6 +25,9 @@
 (defprotocol IHasReconciler
   (get-reconciler [this]))
 
+(defprotocol IReactClass
+  (create-element [this props]))
+
 (defprotocol IReactElement
   (all-clj-props [this])
   (all-clj-routes [this])
@@ -32,7 +36,8 @@
   (update-clj-state! [this f])
   (clj-computed [this])
   (clj-routes [this])
-  (depth [this]))
+  (depth [this])
+  (force-update! [this]))
 
 (defprotocol ILajterClass
   (spec-map [this]))

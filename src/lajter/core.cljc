@@ -21,7 +21,7 @@
 
 (defn update-state! [this f & args]
   (p/update-clj-state! this #(apply f % args))
-  (.forceUpdate this))
+  (p/force-update! this))
 
 (defn get-computed
   ([this]
@@ -42,23 +42,21 @@
 (defn- get-child-computed [this child-component]
   (some-> (p/spec-map this)
           :lajter/computed
-          (get child-component)
-          (as-> f (f this))))
+          (as-> f (f this))
+          (get child-component)))
 
 (defn render-child [this child-component]
   (let [reconciler (p/get-reconciler this)]
-    (lajter.react/create-instance
-      reconciler
-      (p/react-class reconciler child-component)
-      (p/all-clj-props this)
-      ;; TODO: Put all-clj-props together with all-clj-routes.
-      (get-child-computed this child-component)
-      (p/all-clj-routes this)
-      (inc (p/depth this)))))
+    (-> (lajter.react/create-element
+          (p/react-class reconciler child-component)
+          reconciler
+          (inc (p/depth this))
+          (p/all-clj-props this)
+          (p/all-clj-routes this)
+          (get-child-computed this child-component))
+        #?(:clj lajter.react/call-render))))
 
 (defn render-route [this route]
-  ;; TODO: Debug this.
-  ;; GET the stuff to render.
   (let [selected-route (get (p/clj-routes this) route)
         child-component (-> (p/spec-map this)
                             (:lajter/routing)
@@ -103,7 +101,7 @@
               cat
               [(:lajter/children spec)
                (eduction
-                 (map #(route->component reconciler %))
+                 (keep #(route->component reconciler %))
                  (routing-choices spec))])))))
 
 (defn get-full-routing [reconciler x]
@@ -115,12 +113,12 @@
             cat
             [(:lajter/children spec)
              (eduction
-               (map (fn [[route selected-route]]
+               (keep (fn [[route selected-route]]
                       (get-in spec [:lajter/routing route selected-route])))
                routing)]))))
 
 (defn get-root [reconciler]
-  (get-in reconciler [:config :root-component]))
+  (p/get-config reconciler :root-component))
 
 (defn get-root-query [reconciler]
   (get-full-query reconciler (get-root reconciler)))
@@ -167,10 +165,24 @@
         layer (-> (layer/transaction-layer reconciler query)
                   (layer/with-id tx-id)
                   (layer/with-query-params (p/query-params reconciler)))]
+    (log "ADDING LAYER: " layer)
     (p/add-layer! reconciler layer)
     (if (seq (:layer.remote/targets layer))
       (schedule-sends! reconciler))
     (schedule-render! reconciler)))
+
+(defn latest-db-from-layers! [reconciler env]
+  (let [state (:state reconciler)
+        {:keys [snapshot layers]} (layer/top-layers (:layers @state))
+        db (cond-> (:layer.snapshot/db snapshot)
+                   (seq layers)
+                   (layer/db-with-layers reconciler env layers))]
+    ;; when there are layers on top of the snapshot, make
+    ;; a new snapshot and (if prod) remove the previous snapshots.
+    (when (seq layers)
+             (let [new-snapshot (layer/->snapshot-layer db)]
+               (swap! state update :layers layer/add-layer new-snapshot)))
+    db))
 
 (defrecord Reconciler [config state]
   p/IHasReconciler
@@ -180,8 +192,16 @@
     (remove-watch (:app-state config) ::reconciler))
   p/IEnvironment
   (to-env [this]
-    (-> (select-keys config [:parser :state :remotes])
-        (assoc :reconciler this)))
+    ;; TODO: Fix recursion here.
+    ;; latest-db -> db-with-layers -> to-env -> latest-db
+    (let [app-state (:state config)
+          env (-> (select-keys config [:parser :remotes])
+                  (assoc :reconciler this
+                         :state app-state
+                         :db @app-state))
+          ;; Update the old environment with the latest layers.
+          db (latest-db-from-layers! this env)]
+      (assoc env :state (atom db) :db db)))
   p/ILayers
   (add-layer! [this layer]
     (swap! state #(-> (update % :layers layer/add-layer layer)
@@ -201,6 +221,8 @@
   p/IBasis
   (basis-t [this] (:t @state))
   p/IReconciler
+  (get-config [_] config)
+  (get-config [_ k] (get config k))
   (react-class [this component-spec]
     (if-let [klass (get (:class-cache @state) component-spec)]
       klass
@@ -211,23 +233,12 @@
     (swap! state dissoc :scheduled-render?)
     (let [{:keys [parser root-render target indexer root-component]} config
 
-
-          {:keys [root-element] :as curr-state} @state
-          _ (log "layers: " (:layers curr-state))
-          {:keys [snapshot layers]} (layer/top-layers (:layers curr-state))
-          db (cond-> (:layer.snapshot/db snapshot)
-                     (seq layers)
-                     (layer/db-with-layers this layers))
-          ;; when there are layers on top of the snapshot, make
-          ;; a new snapshot and (if prod) remove the previous snapshots.
-          _ (when (seq layers)
-              (let [new-snapshot (layer/->snapshot-layer db)]
-                (swap! state update :layers layer/add-layer new-snapshot)))
-
-          env (assoc (p/to-env this) :state (atom db) :db db)
+          env (p/to-env this)
           root-class (p/react-class this root-component)
           all-props (parser env (get-full-query this root-class))
-          all-routing (get-full-routing this root-class)]
+          all-routing (get-full-routing this root-class)
+
+          {:keys [root-element]} @state]
 
       (if (some? root-element)
         (let [prev-props (p/all-clj-props root-element)
@@ -244,8 +255,9 @@
                                               all-props
                                               all-routing))))
         (let [root-elem
-              (-> (lajter.react/create-instance
-                    this root-class all-props nil all-routing 0)
+              (-> (lajter.react/create-element
+                    root-class this 0 all-props all-routing nil)
+                  #?(:clj lajter.react/call-render)
                   (root-render target))]
           (swap! state assoc :root-element root-elem)
           root-elem))))
@@ -340,11 +352,19 @@
 ;;;;;;;;;;;;;;;;;;;;;;;
 ;; Public entry point
 
+;; TODO: document what this does:
+(def default-route-fn
+  (fn [env {:lajter.routing/keys [route choices]}]
+    (throw
+      (ex-info "Accessed routing but now routing function was provided. Please pass a :route-fn to your reconciler."
+               {:fn-key    :route-fn
+                :arguments '[env {:lajter.routing/keys [route choices]}]}))))
+
 (defn mount [{:keys [parser send-fn merge-fn route-fn
                      query-param-fn indexer optimize]
               :or {send-fn (fn [reconciler cb query target])
                    merge-fn (fn [reconciler db value tx-info])
-                   route-fn (fn [env {:lajter.routing/keys [route choices]}])
+                   route-fn default-route-fn
                    query-param-fn (fn [env])
                    indexer (indexer)
                    optimize #(sort-by p/depth %)}
