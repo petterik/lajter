@@ -4,12 +4,11 @@
     [lajter.model :as model]))
 
 (def model-schema
-  {:model.entity/type {:db/valueType :db.type/ref}
-   :model.entity/symbol {:db/index true}
-   :model.type/symbol {:db/unique :db.unique/identity}
-   :model.field/symbol {:db/index true}
-   :model.field/parent {:db/valueType :db.type/ref}
-   :model.field/type {:db/valueType :db.type/ref}})
+  {:model.type/symbol {:db/unique :db.unique/identity}
+   :model.node/symbol {:db/index true}
+   :model.node/parent {:db/valueType :db.type/ref}
+   :model.node/type   {:db/valueType :db.type/ref}
+   :model.node/meta   {:db/valueType :db.type/ref}})
 
 (deftest can-define-datascript-model-in-its-own-syntax
   (is (= model-schema
