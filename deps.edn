@@ -3,7 +3,7 @@
  :deps
  {org.clojure/clojure       {:mvn/version "1.10.0-RC3" :scope "provided"}
   org.clojure/clojurescript {:mvn/version "1.10.439" :scope "provided"}
-  datascript                {:mvn/version "0.16.7"}
+  datascript                {:mvn/version "0.17.0"}
   org.clojars.petterik/lajt {:mvn/version "0.1.2-SNAPSHOT"}
   medley                    {:mvn/version "1.0.0"}
   hodur/engine              {:mvn/version "0.1.5"}

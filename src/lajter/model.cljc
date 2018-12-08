@@ -56,7 +56,9 @@
 (def model-schema (model->datascript-schema model-schema-model))
 
 (defn init-meta-db []
-  (d/db (d/create-conn model-schema)))
+  (-> (d/create-conn model-schema)
+      (d/db)
+      (d/db-with (map #(hash-map :model.type/symbol %) primitive-types))))
 
 (def root-entity-rule
   '[[(root-node ?node ?sym)
@@ -110,50 +112,43 @@
         find-node (memoize-found-id (partial find-node meta-db))
         find-type (memoize-found-id (partial find-type meta-db))
 
+        type-map (fn [sym]
+                   {:db/id             (find-type sym)
+                    :model.type/symbol sym})
+
         add-parent
-        (fn self [{:keys [sym selectors] :as children} parent]
-          (let [m (meta sym)]
-            (eduction
-              (map #(assoc % :parent parent))
-              (map #(assoc % :db/id (find-node parent (:sym %))))
-              (map #(cond-> % (seq m) (assoc :meta m)))
-              (map #(cond-> % (seq selectors)
-                            (update :selectors self (:db/id %))))
-              children)))
+        (fn self [selectors parent]
+          (->> selectors
+               (map #(assoc % :parent parent
+                              :db/id (find-node parent (:sym %))
+                              :meta (meta (:sym %))))
+               (map #(update % :selectors self (:db/id %)))))
 
         node->tx
         (fn self [{:keys [sym selectors db/id meta parent]}]
-          (let [node (cond-> {:db/id             id
+          (let [tag (:tag meta)
+                node (cond-> {:db/id             id
                               :model.node/parent parent
                               :model.node/symbol sym}
                              (seq meta)
                              (assoc :model.node/meta meta)
-                             (:tag meta)
-                             (assoc :model.node/type
-                                    (find-type (:tag meta))))]
-            (eduction
-              cat
-              [(eduction (mapcat self) selectors)
-               [node]])))]
+                             tag
+                             (assoc :model.node/type (type-map tag)))]
+            (cons node (mapcat self selectors))))]
 
-    (transduce
-      (comp (map (fn [{:keys [sym] :as root}]
-                   (let [db-id (find-root sym)
-                         m (meta sym)]
-                     (-> (assoc root :db/id db-id)
-                         (update :selectors add-parent db-id)
-                         (cond-> (seq m) (assoc :meta m))))))
-            (map (fn [{:keys [sym meta db/id selectors]}]
-                   (let [node (cond-> {:db/id             id
-                                       :model.node/symbol sym}
-                                      (seq meta)
-                                      (assoc :model.node/meta meta)
-                                      (:tag meta)
-                                      (assoc :model.node/type
-                                             (find-type (:tag meta))))]
-                     (into [node]
-                           (mapcat node->tx)
-                           selectors)))))
-      (completing d/db-with)
-      meta-db
-      (s/conform ::model model))))
+    (->> (s/conform ::model model)
+         (map (fn [{:keys [sym] :as root}]
+                (let [db-id (find-root sym)]
+                  (-> (assoc root :db/id db-id
+                                  :meta (meta sym))
+                      (update :selectors add-parent db-id)))))
+         (mapcat
+           (fn [{:keys [sym meta db/id selectors]}]
+             (let [node (cond-> {:db/id             id
+                                 :model.node/symbol sym
+                                 ;; Root nodes are their own types.
+                                 :model.node/type   (type-map sym)}
+                                (seq meta)
+                                (assoc :model.node/meta meta))]
+               (cons node (mapcat node->tx selectors)))))
+         (d/db-with meta-db))))
