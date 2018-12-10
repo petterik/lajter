@@ -21,8 +21,7 @@
     Model.Node
     [^:db/index symbol
      ^Model.Node parent
-     ^Model.Meta meta
-     ^Model.Type type]])
+     ^Model.Meta meta]])
 
 (def primitive-type? #(contains? primitive-types %))
 (def reference-type? (every-pred some?
@@ -54,22 +53,18 @@
           (s/conform ::model model))))
 
 (def model-schema (model->datascript-schema model-schema-model))
+(def type-entities (map #(hash-map :model.type/symbol %) primitive-types))
 
-(defn init-meta-db []
-  (-> (d/create-conn model-schema)
-      (d/db)
-      (d/db-with (map #(hash-map :model.type/symbol %) primitive-types))))
+(defn init-meta-db
+  ([] (init-meta-db nil))
+  ([schema]
+   (-> (d/create-conn (merge-with merge model-schema schema))
+       (d/db)
+       (d/db-with type-entities))))
 
 (defn is-upper-case? [c]
   #?(:clj  (Character/isUpperCase (char c))
      :cljs (= (str c) (string/upper-case (str c)))))
-
-;; We need to merge new selectors in to the index
-;; based on what's already merged.
-;; We need to walk the db with each selector, passing
-;; parent and looking up the field by sym at each step.
-;; I think this might be useful for later stuff as well.
-;; TODO: Need to pass in DB to this function.
 
 (defn- temp-id [] (d/tempid :db.part/user))
 (defn- temp-id? [id]
@@ -93,9 +88,6 @@
        parent
        sym))
 
-(defn find-type [meta-db tag]
-  (:db/id (d/entity meta-db [:model.type/symbol tag])))
-
 (defn- memoize-found-id
   "Takes a function which tries to find an existing db id
   for a node. Returns a function which, given the same node
@@ -103,72 +95,57 @@
   [find-id-fn]
   (memoize (comp #(or % (temp-id)) (partial find-id-fn))))
 
-(defn- is-capitalized? [sym]
-  (let [c (first (name sym))]
-    #?(:clj  (Character/isUpperCase (char c))
-       :cljs (= c (.toUpperCase c)))))
+(defn flatten-model-xf [meta-db]
+  (let [find-root (memoize-found-id (partial find-root meta-db))
+        find-node (memoize-found-id (partial find-node meta-db))
+        add-node-id
+        (fn self [{:keys [sym parent] :as m}]
+          (let [id (find-node sym parent)]
+            (-> (assoc m :id id)
+                (update :selectors (partial map #(self (assoc % :parent id)))))))]
+    (mapcat (fn [{:keys [sym selectors] :as m}]
+              (let [id (find-root sym)]
+                (cons (assoc m :id id)
+                      (map (comp add-node-id #(assoc % :parent id))
+                           selectors)))))))
 
-(def default-extenders
-  (fn [db]
-    [(fn [node]
-       (assoc node :model.node/is-capitalized?
-                   (is-capitalized? (:model.node/symbol node))))]))
+(defn default-pipeline
+  "Pipeline taking a flattened model, linked by db ids and
+  returns nodes to transacted in to the model database.
 
-(defn comp-extenders [ext1 ext2]
-  (if (and ext1 ext2)
-    (fn [db] (into (ext1 db) (ext2 db)))
-    (or ext1
-        ext2
-        (constantly nil))))
+  The idea is that we can use this pipeline to hook in to
+  whatever we might need in the future as far as merging
+  data goes."
+  [meta-db]
+  [(map (fn [{:keys [id sym]}]
+          (let [m (meta sym)]
+            (cond-> {:db/id             id
+                     :model.node/symbol sym}
+                    (seq m)
+                    (assoc :model.node/meta m)))))
+   ;; needs is-capitalized attribute to figure out whether
+   ;; the node is its own type definition or not.
+   (let [is-capitalized?
+         (fn [sym]
+           (let [c (first (name sym))]
+             #?(:clj  (Character/isUpperCase (char c))
+                :cljs (= c (.toUpperCase c)))))]
+     (map #(assoc % :model.node/is-capitalized?
+                    (is-capitalized? (:model.node/symbol %)))))
+
+   ;; TODO: Merge metadata.
+   ])
 
 (defn index-model
   ([meta-db model]
-   (index-model meta-db model {}))
-  ([meta-db model {:keys [extenders]}]
-   (let [find-root (memoize-found-id (partial find-root meta-db))
-         find-node (memoize-found-id (partial find-node meta-db))
-         extenders! ((comp-extenders default-extenders extenders)
-                      meta-db)
+   (index-model meta-db model {:pipeline default-pipeline}))
+  ([meta-db model {:keys [pipeline]}]
+   (->> (s/conform ::model model)
+        (into [] (apply comp
+                        (flatten-model-xf meta-db)
+                        (pipeline meta-db)))
+        (d/db-with meta-db))))
 
-         add-parent
-         (fn self [selectors parent]
-           (->> selectors
-                (map #(assoc % :parent parent
-                               :db/id (find-node parent (:sym %))
-                               :meta (meta (:sym %))))
-                (map #(update % :selectors self (:db/id %)))))
-
-         node->model-node
-         (fn self [{:keys [sym selectors db/id meta parent]}]
-           (let [tag (:tag meta)
-                 node (cond-> {:db/id             id
-                               :model.node/parent parent
-                               :model.node/symbol sym}
-                              (seq meta)
-                              (assoc :model.node/meta meta))]
-             (cons node (mapcat self selectors))))]
-
-     (->> (s/conform ::model model)
-          (map (fn [{:keys [sym] :as root}]
-                 (let [db-id (find-root sym)]
-                   (-> (assoc root :db/id db-id
-                                   :meta (meta sym))
-                       (update :selectors add-parent db-id)))))
-          (mapcat
-            (fn [{:keys [sym meta db/id selectors]}]
-              (let [node (cond-> {:db/id             id
-                                  :model.node/symbol sym}
-                                 (seq meta)
-                                 (assoc :model.node/meta meta))]
-                (cons node (mapcat node->model-node selectors)))))
-          (map (fn [node]
-                 (reduce #(%2 %1) node extenders!)))
-          (d/db-with meta-db)))))
-
-(defn model->datascript-schema-2 []
-  (let [meta-db (-> (init-meta-db)
-                    (index-model model-schema-model))]
-    (d/q '{:find [(pull ?e [{}])]})))
 
 (defn- query-with-rules [query-map inputs rules]
   (let [in (:in query-map)
