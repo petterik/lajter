@@ -60,13 +60,9 @@
       (d/db)
       (d/db-with (map #(hash-map :model.type/symbol %) primitive-types))))
 
-(def root-entity-rule
-  '[[(root-node ?node ?sym)
-     [?node :model.node/symbol ?sym]
-     [(missing? $ ?node :model.node/parent)]]
-    [(meta-matching ?node ?meta-k ?meta-v)
-     [?node :model.node/meta ?meta]
-     [?meta ?meta-k ?meta-v]]])
+(defn is-upper-case? [c]
+  #?(:clj  (Character/isUpperCase (char c))
+     :cljs (= (str c) (string/upper-case (str c)))))
 
 ;; We need to merge new selectors in to the index
 ;; based on what's already merged.
@@ -79,21 +75,21 @@
 (defn- temp-id? [id]
   (neg? id))
 
+(declare q)
+
 (defn find-root [meta-db sym]
-  (d/q '{:find  [?e .]
-         :in    [$ % ?sym]
+  (q '{:find  [?e .]
+         :in    [$ ?sym]
          :where [(root-node ?e ?sym)]}
        meta-db
-       root-entity-rule
        sym))
 
 (defn find-node [meta-db parent sym]
-  (d/q '{:find  [?e .]
-         :in    [$ % ?parent ?sym]
+  (q '{:find  [?e .]
+         :in    [$ ?parent ?sym]
          :where [[?e :model.node/parent ?parent]
                  [?e :model.node/symbol ?sym]]}
        meta-db
-       root-entity-rule
        parent
        sym))
 
@@ -107,48 +103,108 @@
   [find-id-fn]
   (memoize (comp #(or % (temp-id)) (partial find-id-fn))))
 
-(defn index-model [meta-db model]
-  (let [find-root (memoize-found-id (partial find-root meta-db))
-        find-node (memoize-found-id (partial find-node meta-db))
-        find-type (memoize-found-id (partial find-type meta-db))
+(defn- is-capitalized? [sym]
+  (let [c (first (name sym))]
+    #?(:clj  (Character/isUpperCase (char c))
+       :cljs (= c (.toUpperCase c)))))
 
-        type-map (fn [sym]
-                   {:db/id             (find-type sym)
-                    :model.type/symbol sym})
+(def default-extenders
+  (fn [db]
+    [(fn [node]
+       (assoc node :model.node/is-capitalized?
+                   (is-capitalized? (:model.node/symbol node))))]))
 
-        add-parent
-        (fn self [selectors parent]
-          (->> selectors
-               (map #(assoc % :parent parent
-                              :db/id (find-node parent (:sym %))
-                              :meta (meta (:sym %))))
-               (map #(update % :selectors self (:db/id %)))))
+(defn comp-extenders [ext1 ext2]
+  (if (and ext1 ext2)
+    (fn [db] (into (ext1 db) (ext2 db)))
+    (or ext1
+        ext2
+        (constantly nil))))
 
-        node->tx
-        (fn self [{:keys [sym selectors db/id meta parent]}]
-          (let [tag (:tag meta)
-                node (cond-> {:db/id             id
-                              :model.node/parent parent
-                              :model.node/symbol sym}
-                             (seq meta)
-                             (assoc :model.node/meta meta)
-                             tag
-                             (assoc :model.node/type (type-map tag)))]
-            (cons node (mapcat self selectors))))]
+(defn index-model
+  ([meta-db model]
+   (index-model meta-db model {}))
+  ([meta-db model {:keys [extenders]}]
+   (let [find-root (memoize-found-id (partial find-root meta-db))
+         find-node (memoize-found-id (partial find-node meta-db))
+         extenders! ((comp-extenders default-extenders extenders)
+                      meta-db)
 
-    (->> (s/conform ::model model)
-         (map (fn [{:keys [sym] :as root}]
-                (let [db-id (find-root sym)]
-                  (-> (assoc root :db/id db-id
-                                  :meta (meta sym))
-                      (update :selectors add-parent db-id)))))
-         (mapcat
-           (fn [{:keys [sym meta db/id selectors]}]
-             (let [node (cond-> {:db/id             id
-                                 :model.node/symbol sym
-                                 ;; Root nodes are their own types.
-                                 :model.node/type   (type-map sym)}
-                                (seq meta)
-                                (assoc :model.node/meta meta))]
-               (cons node (mapcat node->tx selectors)))))
-         (d/db-with meta-db))))
+         add-parent
+         (fn self [selectors parent]
+           (->> selectors
+                (map #(assoc % :parent parent
+                               :db/id (find-node parent (:sym %))
+                               :meta (meta (:sym %))))
+                (map #(update % :selectors self (:db/id %)))))
+
+         node->model-node
+         (fn self [{:keys [sym selectors db/id meta parent]}]
+           (let [tag (:tag meta)
+                 node (cond-> {:db/id             id
+                               :model.node/parent parent
+                               :model.node/symbol sym}
+                              (seq meta)
+                              (assoc :model.node/meta meta))]
+             (cons node (mapcat self selectors))))]
+
+     (->> (s/conform ::model model)
+          (map (fn [{:keys [sym] :as root}]
+                 (let [db-id (find-root sym)]
+                   (-> (assoc root :db/id db-id
+                                   :meta (meta sym))
+                       (update :selectors add-parent db-id)))))
+          (mapcat
+            (fn [{:keys [sym meta db/id selectors]}]
+              (let [node (cond-> {:db/id             id
+                                  :model.node/symbol sym}
+                                 (seq meta)
+                                 (assoc :model.node/meta meta))]
+                (cons node (mapcat node->model-node selectors)))))
+          (map (fn [node]
+                 (reduce #(%2 %1) node extenders!)))
+          (d/db-with meta-db)))))
+
+(defn model->datascript-schema-2 []
+  (let [meta-db (-> (init-meta-db)
+                    (index-model model-schema-model))]
+    (d/q '{:find [(pull ?e [{}])]})))
+
+(defn- query-with-rules [query-map inputs rules]
+  (let [in (:in query-map)
+        has-rules? (some #{'%} in)
+        inputs (if has-rules?
+                 (update (vec inputs) 0 into rules)
+                 (cons rules inputs))
+        in (cond
+             has-rules? in
+             (seq in) (cons (first in) (cons '% (rest in)))
+             :else '[$ %])]
+    [inputs (assoc query-map :in in)]))
+
+(def query-rules
+  ['[(root-node ?node ?sym)
+     [(missing? $ ?node :model.node/parent)]
+     [?node :model.node/symbol ?sym]]
+   ;; Bind k and v to attributes in node's meta
+   '[(node-meta ?node ?meta-k ?meta-v)
+     [?node :model.node/meta ?meta]
+     [?meta ?meta-k ?meta-v]]
+   ;; Extract type of a node. Either check its meta tag
+   ;; or check whether it's the root node and it is capitalized.
+   '[(node-type ?node ?type)
+     (node-meta ?node :tag ?type)]
+   '[(node-type ?node ?type)
+     [?node :model.node/symbol ?sym]
+     (root-node ?node ?sym)
+     [?node :model.node/is-capitalized? ?cap]
+     [(true? ?cap)]
+     [(identity ?sym) ?type]]])
+
+(defn q
+  "Query a model db with some predefined rules."
+  [query-map model-db & inputs]
+  {:pre [(= (count inputs)
+            (dec (count (:in query-map '[$]))))]}
+  (let [[inputs query] (query-with-rules query-map inputs query-rules)]
+    (apply d/q query model-db inputs)))

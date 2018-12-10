@@ -1,6 +1,6 @@
 (ns lajter.model-test
   (:require
-    [clojure.test :refer [deftest is]]
+    [clojure.test :refer [deftest is testing]]
     [lajter.model :as model]))
 
 (def model-schema
@@ -13,3 +13,15 @@
 (deftest can-define-datascript-model-in-its-own-syntax
   (is (= model-schema
          (model/model->datascript-schema model/model-schema-model))))
+
+(deftest model-index-test
+  (let [meta-db (model/init-meta-db)]
+    (testing "Capitalized root nodes have their own types"
+      (= 'Person
+         (model/q
+           '{:find  [?type .]
+             :in [$ ?root]
+             :where [(root-node ?e ?root)
+                     (node-type ?e ?type)]}
+           (model/index-model meta-db '[Person])
+           'Person)))))

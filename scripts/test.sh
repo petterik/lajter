@@ -12,4 +12,4 @@ echo "########"
 echo "RUNNING cljs tests" 
 echo "########"
 
-clj -A:test -m cljs.main --main lajter.tests
+clj -A:test -m cljs.main -re node --main lajter.tests

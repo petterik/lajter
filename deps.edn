@@ -29,7 +29,7 @@
    :extra-deps
    {org.clojure/test.check                 {:mvn/version "0.10.0-alpha2"}
     com.clojure-goes-fast/clj-memory-meter {:mvn/version "0.1.0"}
-    expound                                {:mvn/version "0.7.0"}
+    expound                                {:mvn/version "0.7.1"}
     rum                                    {:mvn/version "0.11.2"}
     }}
   :uberjar
