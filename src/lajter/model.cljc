@@ -50,11 +50,22 @@
       (:model.node/meta)
       (:db/id)))
 
+(defn- temp-id [] (d/tempid :db.part/user))
+(defn- temp-id? [id]
+  (neg? id))
+
 (defn comp-pipeline [& pipelines]
   (reduce (fn [p1 p2]
             (fn [opts]
               (into (p1 opts) (p2 opts))))
           pipelines))
+
+(defn default-merge-meta-fn
+  "Default implementation of handling merge conflicts when
+  merging meta data for a node. Returning the new value if
+  not nil."
+  [env old-value new-value]
+  (or new-value old-value))
 
 (defn default-pipeline
   "Pipeline taking a flattened model, linked by db ids and
@@ -63,7 +74,9 @@
   The idea is that we can use this pipeline to hook in to
   whatever we might need in the future as far as merging
   data goes."
-  [{:keys [db]}]
+  [{:keys [db merge-meta-fn]
+    :or   {merge-meta-fn default-merge-meta-fn}
+    :as   pipeline-opts}]
   [(map (fn [{:keys [id sym parent]}]
           (let [m (meta sym)]
             (cond-> {:db/id             id
@@ -84,14 +97,26 @@
 
    ;; Merge metadata.
    (map (fn [node]
-          (cond-> node
-                  (:model.node/meta node)
-                  (assoc-in [:model.node/meta :db/id]
-                            (find-meta db (:db/id node))))))])
+          (let [node-meta (:model.node/meta node)
+                meta-id (or (find-meta db (:db/id node))
+                            (temp-id))
+                old-meta (d/entity db meta-id)
 
-(defn- temp-id [] (d/tempid :db.part/user))
-(defn- temp-id? [id]
-  (neg? id))
+                merge-fn
+                (fn [[k v]]
+                  (if-some [old-v (get old-meta k)]
+                    (let [env (assoc pipeline-opts :k k :node node)]
+                      (merge-meta-fn env old-v v))
+                    v))
+
+                new-meta
+                (cond->> node-meta
+                         (not (temp-id? meta-id))
+                         (into {} (map (juxt key merge-fn))))]
+            (cond-> node
+                    (seq new-meta)
+                    (assoc :model.node/meta
+                           (assoc new-meta :db/id meta-id))))))])
 
 (defn- root->txs [meta-db {:keys [sym selectors] :as m}]
   (let [add-node-id
@@ -107,8 +132,7 @@
 
 (defn index-model
   ([meta-db model]
-   (index-model meta-db model {:pipeline      default-pipeline
-                               :pipeline-opts {}}))
+   (index-model meta-db model {:pipeline default-pipeline}))
   ([meta-db model {:keys [pipeline pipeline-opts]}]
    (let [pipeline (comp-pipeline default-pipeline pipeline)]
      (reduce (fn [meta-db root]
