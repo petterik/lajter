@@ -27,14 +27,6 @@
   ([schema]
    (d/db (d/create-conn (merge-with merge model-schema schema)))))
 
-(defn is-upper-case? [c]
-  #?(:clj  (Character/isUpperCase (char c))
-     :cljs (= (str c) (string/upper-case (str c)))))
-
-(defn- temp-id [] (d/tempid :db.part/user))
-(defn- temp-id? [id]
-  (neg? id))
-
 (declare q)
 
 (defn find-root [meta-db sym]
@@ -44,35 +36,25 @@
        meta-db
        sym))
 
-(defn find-node [meta-db parent sym]
+(defn find-node [meta-db sym parent]
   (q '{:find  [?e .]
-         :in    [$ ?parent ?sym]
-         :where [[?e :model.node/parent ?parent]
-                 [?e :model.node/symbol ?sym]]}
-       meta-db
-       parent
-       sym))
+       :in    [$ ?sym ?parent]
+       :where [[?e :model.node/parent ?parent]
+               [?e :model.node/symbol ?sym]]}
+     meta-db
+     sym
+     parent))
 
-(defn- memoize-found-id
-  "Takes a function which tries to find an existing db id
-  for a node. Returns a function which, given the same node
-  input (such as sym, or sym & parent), returns the same id."
-  [find-id-fn]
-  (memoize (comp #(or % (temp-id)) (partial find-id-fn))))
+(defn find-meta [meta-db node-id]
+  (-> (d/entity meta-db node-id)
+      (:model.node/meta)
+      (:db/id)))
 
-(defn flatten-model-xf [meta-db]
-  (let [find-root (memoize-found-id (partial find-root meta-db))
-        find-node (memoize-found-id (partial find-node meta-db))
-        add-node-id
-        (fn self [{:keys [sym parent] :as m}]
-          (let [id (find-node sym parent)]
-            (-> (assoc m :id id)
-                (update :selectors (partial map #(self (assoc % :parent id)))))))]
-    (mapcat (fn [{:keys [sym selectors] :as m}]
-              (let [id (find-root sym)]
-                (cons (assoc m :id id)
-                      (map (comp add-node-id #(assoc % :parent id))
-                           selectors)))))))
+(defn comp-pipeline [& pipelines]
+  (reduce (fn [p1 p2]
+            (fn [opts]
+              (into (p1 opts) (p2 opts))))
+          pipelines))
 
 (defn default-pipeline
   "Pipeline taking a flattened model, linked by db ids and
@@ -81,7 +63,7 @@
   The idea is that we can use this pipeline to hook in to
   whatever we might need in the future as far as merging
   data goes."
-  [meta-db]
+  [{:keys [db]}]
   [(map (fn [{:keys [id sym parent]}]
           (let [m (meta sym)]
             (cond-> {:db/id             id
@@ -100,19 +82,42 @@
      (map #(assoc % :model.node/capitalized?
                     (capitalized? (:model.node/symbol %)))))
 
-   ;; TODO: Merge metadata.
+   ;; Merge metadata.
+   (map (fn [node]
+          (cond-> node
+                  (:model.node/meta node)
+                  (assoc-in [:model.node/meta :db/id]
+                            (find-meta db (:db/id node))))))])
 
-   ])
+(defn- temp-id [] (d/tempid :db.part/user))
+(defn- temp-id? [id]
+  (neg? id))
+
+(defn- root->txs [meta-db {:keys [sym selectors] :as m}]
+  (let [add-node-id
+        (fn self [parent {:keys [sym] :as m}]
+          (let [id (or (find-node meta-db sym parent)
+                       (temp-id))]
+            (-> (assoc m :id id :parent parent)
+                (update :selectors #(map (partial self id) %)))))
+        id (or (find-root meta-db sym)
+               (temp-id))]
+    (cons (assoc m :id id)
+          (map (partial add-node-id id) selectors))))
 
 (defn index-model
   ([meta-db model]
-   (index-model meta-db model {:pipeline default-pipeline}))
-  ([meta-db model {:keys [pipeline]}]
-   (->> (s/conform ::model model)
-        (into [] (apply comp
-                        (flatten-model-xf meta-db)
-                        (pipeline meta-db)))
-        (d/db-with meta-db))))
+   (index-model meta-db model {:pipeline      default-pipeline
+                               :pipeline-opts {}}))
+  ([meta-db model {:keys [pipeline pipeline-opts]}]
+   (let [pipeline (comp-pipeline default-pipeline pipeline)]
+     (reduce (fn [meta-db root]
+               (let [xf (apply comp (pipeline (assoc pipeline-opts :db meta-db)))]
+                 (->> (root->txs meta-db root)
+                      (sequence xf)
+                      (d/db-with meta-db))))
+             meta-db
+             (s/conform ::model model)))))
 
 (defn find-index [pred coll]
   (->> coll
