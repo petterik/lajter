@@ -29,14 +29,18 @@
 
 (declare q)
 
-(defn find-root [meta-db sym]
+(defn find-root
+  "Returns db/id of root node for a symbol."
+  [meta-db sym]
   (q '{:find  [?e .]
-         :in    [$ ?sym]
-         :where [(root-node ?e ?sym)]}
-       meta-db
-       sym))
+       :in    [$ ?sym]
+       :where [(root-node ?e ?sym)]}
+     meta-db
+     sym))
 
-(defn find-node [meta-db sym parent]
+(defn find-node-by-parent
+  "Returns db/id of root node for a symbol and parent."
+  [meta-db sym parent]
   (q '{:find  [?e .]
        :in    [$ ?sym ?parent]
        :where [[?e :model.node/parent ?parent]
@@ -45,20 +49,27 @@
      sym
      parent))
 
-(defn find-meta [meta-db node-id]
+(defn find-meta
+  "Returns db/id of meta data entity for a node's db/id."
+  [meta-db node-id]
   (-> (d/entity meta-db node-id)
       (:model.node/meta)
       (:db/id)))
 
-(defn- temp-id [] (d/tempid :db.part/user))
-(defn- temp-id? [id]
+(defn temp-id []
+  (d/tempid :db.part/user))
+
+(defn temp-id? [id]
   (neg? id))
 
-(defn comp-pipeline [& pipelines]
-  (reduce (fn [p1 p2]
-            (fn [opts]
-              (into (p1 opts) (p2 opts))))
-          pipelines))
+(defn comp-pipeline
+  "Composes indexing pipelines, calling pipelines functions
+  from left to right (like transducers)."
+  [& pipelines]
+  (fn [opts]
+    (into []
+          (mapcat #(% opts))
+          pipelines)))
 
 (defn default-merge-meta-fn
   "Default implementation of handling merge conflicts when
@@ -118,10 +129,15 @@
                     (assoc :model.node/meta
                            (assoc new-meta :db/id meta-id))))))])
 
-(defn- root->txs [meta-db {:keys [sym selectors] :as m}]
+(defn- root->txs
+  "Takes a model root and returns itself and its children as
+  DataScript entities.
+  Looks up already existing entities in the db, such that they
+  are merged based on their roots and their parents."
+  [meta-db {:keys [sym selectors] :as m}]
   (let [add-node-id
         (fn self [parent {:keys [sym] :as m}]
-          (let [id (or (find-node meta-db sym parent)
+          (let [id (or (find-node-by-parent meta-db sym parent)
                        (temp-id))]
             (-> (assoc m :id id :parent parent)
                 (update :selectors #(map (partial self id) %)))))
@@ -131,6 +147,13 @@
           (map (partial add-node-id id) selectors))))
 
 (defn index-model
+  "Takes a meta-db and a model conforming to ::model.
+  Returns a new meta-db with the model indexed and merged with
+  the existing model.
+
+  Merge rules:
+  * Roots are unique by their symbol.
+  * A node or root cannot have two children with the same symbol."
   ([meta-db model]
    (index-model meta-db model {:pipeline default-pipeline}))
   ([meta-db model {:keys [pipeline pipeline-opts]}]
@@ -143,16 +166,24 @@
              meta-db
              (s/conform ::model model)))))
 
-(defn find-index [pred coll]
+(defn- find-index
+  "Finds the first index where pred is truthy in coll."
+  [pred coll]
   (->> coll
        (keep-indexed (fn [idx x] (when (pred x) idx)))
        (first)))
 
-(defn- query-with-rules [query-map inputs rules]
+(defn- query-with-rules
+  "Given query, inputs to datascript.core/q and query rules,
+  adds the rule symbol (%) to the query unless it's in there,
+  and concatenate the given rules to the inputs.
+
+  Returns the input and query with rules added to them."
+  [query-map inputs rules]
   (let [inputs (vec inputs)
         rule-idx (find-index #{'%} inputs)
         inputs (if rule-idx
-                 (update  rule-idx into rules)
+                 (update rule-idx into rules)
                  (into inputs [rules]))
         in (cond-> (or (some-> (:in query-map) (not-empty) (vec))
                        '[$])
@@ -161,6 +192,9 @@
     [inputs (assoc query-map :in (vec in))]))
 
 (def query-rules
+  "Rules giving meaning to positioning and capitalization of
+  model symbols.
+  Adds access to node meta data"
   ;; Bind ?e to root node matching symbol.
   '[[(root-node ?e ?sym)
      [?e :model.node/symbol ?sym]
