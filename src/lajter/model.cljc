@@ -1,20 +1,29 @@
 (ns lajter.model
+  "Namespace for indexing (merging) and querying domain
+  models.
+
+  The format of a domain model is that of Hodur:
+  https://github.com/luchiniatwork/hodur-engine
+
+  Examples:
+    ;; Single Person entity.
+  [Person]
+
+  ;; Person entity with first and last name.
+  [Person
+   [first-name last-name]]
+
+  ;; Symbols can have meta
+  [^:root Person
+   [^String full-name
+    ^Person ^:many friends [full-name]]]"
   (:require
     [clojure.spec.alpha :as s]
-    [clojure.string :as string]
-    [datascript.core :as d]
-    [medley.core :as m]))
+    [datascript.core :as d]))
 
 (s/def ::model
   (s/* (s/cat :sym symbol?
               :selectors (s/? (s/and coll? ::model)))))
-
-(def primitive-types
-  '#{String Boolean Integer Float ID})
-
-(def primitive-type? #(contains? primitive-types %))
-(def reference-type? (every-pred some?
-                                 (complement primitive-type?)))
 
 (def model-schema
   {:model.type/symbol {:db/unique :db.unique/identity}
