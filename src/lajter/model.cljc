@@ -16,7 +16,26 @@
   ;; Symbols can have meta
   [^:root Person
    [^String full-name
-    ^Person ^:many friends [full-name]]]"
+    ^Person ^:many friends [full-name]]]
+
+  Indexing is extensible. Add fields by passing
+  :pipeline with optional :pipeline-opts to
+  model/index-model. Your queries can then use
+  this data.
+
+  To make your custom index more powerful, add
+  additional schema when creating the db.
+
+  This namespace comes with rules which are useful
+  with the default indexing. See model/query-rules
+  and model/q, which uses the rules.
+
+  Indexing with merge root nodes and their children
+  by symbols being unique by their siblings.
+
+  Metadata merging is customizable by passing
+  :pipeline-opts {:merge-meta-fn (fn [env old new])}
+  to model/index-model."
   (:require
     [clojure.spec.alpha :as s]
     [datascript.core :as d]))
