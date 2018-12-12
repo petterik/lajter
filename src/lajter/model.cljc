@@ -96,7 +96,8 @@
   [& pipelines]
   (fn [opts]
     (into []
-          (mapcat #(% opts))
+          (comp (filter some?)
+                (mapcat #(% opts)))
           pipelines)))
 
 (defn default-merge-meta-fn
@@ -124,6 +125,7 @@
                     (assoc :model.node/meta m)
                     (some? parent)
                     (assoc :model.node/parent parent)))))
+
    ;; needs is-capitalized attribute to figure out whether
    ;; the node is its own type definition or not.
    (let [capitalized?
@@ -131,8 +133,9 @@
            (let [c (first (name sym))]
              #?(:clj  (Character/isUpperCase (char c))
                 :cljs (= c (.toUpperCase c)))))]
-     (map #(assoc % :model.node/capitalized?
-                    (capitalized? (:model.node/symbol %)))))
+     (map (fn [node]
+            (assoc node :model.node/capitalized?
+                        (capitalized? (:model.node/symbol node))))))
 
    ;; Merge metadata.
    (map (fn [node]
@@ -183,7 +186,7 @@
   * Roots are unique by their symbol.
   * A node or root cannot have two children with the same symbol."
   ([meta-db model]
-   (index-model meta-db model {:pipeline default-pipeline}))
+   (index-model meta-db model {}))
   ([meta-db model {:keys [pipeline pipeline-opts]}]
    (let [pipeline (comp-pipeline default-pipeline pipeline)]
      (reduce (fn [meta-db root]

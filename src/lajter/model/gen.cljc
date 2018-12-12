@@ -1,0 +1,2 @@
+(ns lajter.model.gen)
+
