@@ -79,24 +79,23 @@
   ;; the registered queries. OR, does it create its
   ;; own queries? (It'd have to have a way to do that
   ;; though, most likely in the query ns).
-  (def view-data (query/pull app-state
-                             sulo-meta-db
-                             queries))
+  (def view-data (query/pull app-state sulo-meta-db queries))
 
   ;; Sends:
   (def remote-query (query/send sulo-meta-db queries))
-  (def response (gen/gen sulo-meta-db remote-query))
+  (def response #_(remote/send! remote-query) (gen/gen sulo-meta-db
+                                                       remote-query))
   (def app-state (db/merge app-state sulo-meta-db response))
-  (def view-data-2 (query/pull app-state
-                               sulo-meta-db
-                               queries))
-
-  ;; ^ Some of these things require "env" and it should
-  ;; have it.
-
-  ;; The "normal model" can be added at any time to the
-  ;; sulo-meta-db.
+  (def view-data-2 (query/pull app-state sulo-meta-db queries))
 
   (render (clojure.data/diff view-data view-data-2))
   ;; ^ React
+
+  ;; The "normal model" can be added at any time to the
+  ;; sulo-meta-db. We can keep them separate or inside the
+  ;; domain model. Doesn't matter, which is nice.
+
+  ;; Some of these things require an env. Will probably make
+  ;; some of these args maps, so that we can pass anything.
+  ;; Still, this is close to what I have in mind.
   )
