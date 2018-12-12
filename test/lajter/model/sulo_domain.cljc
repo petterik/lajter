@@ -81,12 +81,16 @@
   ;; though, most likely in the query ns).
   (def view-data (query/pull app-state sulo-meta-db queries))
 
-  ;; Sends:
+  ;; Sends (fake):
+  (def remote-db (db/mutate app-state (gen/mutations sulo-meta-db)))
   (def remote-query (query/send sulo-meta-db queries))
-  (def response #_(remote/send! remote-query) (gen/gen sulo-meta-db
-                                                       remote-query))
+  (def response (gen/pull remote-db remote-query))
   (def app-state (db/merge app-state sulo-meta-db response))
-  (def view-data-2 (query/pull app-state sulo-meta-db queries))
+  ;; PROPERTY:
+  (= (query/pull app-state sulo-meta-db queries)
+     (query/pull remote-db sulo-meta-db queries))
+  ;; ^ Given any mutation, a read (query + pull) + merge
+  ;;   should be the same thing!
 
   (render (clojure.data/diff view-data view-data-2))
   ;; ^ React
