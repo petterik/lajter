@@ -50,9 +50,7 @@
 
     Store.Item.Sku.Inventory
     [^Store.Item.Sku.Type type
-     ^:enum value [IN_STOCK
-                   OUT_OF_STOCK
-                   LIMITED]]
+     ^:enum value [IN_STOCK OUT_OF_STOCK LIMITED]]
 
     ^:enum Store.Item.Sku.Type
     [FINITE INFINITE]
@@ -69,7 +67,9 @@
   ;;   translating gql schema to our model format.
 
   (def sulo-meta-db (model/index-model (model/init-meta-db) model))
-  (def data (gen/gen sulo-meta-db '[User Store]))
+  (gen/entity sulo-meta-db 'User)
+
+  (def data (gen/entities sulo-meta-db '[User Store]))
   (def schema (db/datascript-schema sulo-meta-db))
   (def app-state (-> (d/create-conn schema)
                      (d/db)

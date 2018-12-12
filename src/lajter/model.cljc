@@ -48,7 +48,8 @@
   {:model.type/symbol {:db/unique :db.unique/identity}
    :model.node/symbol {:db/index true}
    :model.node/parent {:db/valueType :db.type/ref}
-   :model.node/meta   {:db/valueType :db.type/ref}})
+   :model.node/meta   {:db/valueType :db.type/ref}
+   :tag               {:db/index true}})
 
 (defn init-meta-db
   ([] (init-meta-db nil))
@@ -167,15 +168,15 @@
   are merged based on their roots and their parents."
   [meta-db {:keys [sym selectors] :as m}]
   (let [add-node-id
-        (fn self [parent {:keys [sym] :as m}]
+        (fn self [parent {:keys [sym selectors] :as m}]
           (let [id (or (find-node-by-parent meta-db sym parent)
                        (temp-id))]
-            (-> (assoc m :id id :parent parent)
-                (update :selectors #(map (partial self id) %)))))
+            (cons (assoc m :id id :parent parent)
+                  (mapcat #(self id %) selectors))))
         id (or (find-root meta-db sym)
                (temp-id))]
     (cons (assoc m :id id)
-          (map (partial add-node-id id) selectors))))
+          (mapcat #(add-node-id id %) selectors))))
 
 (defn index-model
   "Takes a meta-db and a model conforming to ::model.
@@ -243,7 +244,17 @@
      (root-node ?node ?sym)
      [?node :model.node/capitalized? ?cap]
      [(true? ?cap)]
-     [(identity ?sym) ?type]]])
+     [(identity ?sym) ?type]]
+    ;; Get all the fields for a symbol.
+    ;; The fields are the root node selector
+    ;; and the fields tagged with the symbol's selector.
+    [(entity-fields ?sym ?field)
+     (root-node ?root ?sym)
+     [?field :model.node/parent ?root]]
+    [(entity-fields ?sym ?field)
+     [?meta :tag ?sym]
+     [?tagged :model.node/meta ?meta]
+     [?field :model.node/parent ?tagged]]])
 
 (defn q
   "Query a model db with some predefined rules."

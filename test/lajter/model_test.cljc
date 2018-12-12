@@ -81,4 +81,16 @@
                                  (fn [{:keys [k]} a b]
                                    (if (= k :sources)
                                      (into a b)
-                                     (or b a)))})))))))))
+                                     (or b a)))}))))))))
+
+  (testing "Entity fields"
+    (let [model '[Person
+                  [name
+                   ^Person friends [name age]]]]
+      (is (= '#{[name] [friends] [age]}
+          (model/q '{:find  [?field-name]
+                     :in    [$ ?sym]
+                     :where [(entity-fields ?sym ?field)
+                             [?field :model.node/symbol ?field-name]]}
+                   (index-model meta-db model)
+                   'Person))))))
