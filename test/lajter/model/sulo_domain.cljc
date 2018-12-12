@@ -49,17 +49,33 @@
      ^Store.Item.Sku.Inventory ^:component inventory]
 
     Store.Item.Sku.Inventory
-    [^Store.Item.Sku.Type type
-     ^:enum value [IN_STOCK OUT_OF_STOCK LIMITED]]
+    [^Keyword
+    ^{:model.type.keyword/namespace
+      "store.item.sku.inventory.type"
+      :model.type.keyword/values #{:finite :infinite}}
+    type
+     ^Keyword
+     ^{:model.type.keyword/namespace "store.item.sku.inventory"
+       :model.type.keyword/values #{:in-stock :out-of-stock :limited}}
+     value]
 
-    ^:enum Store.Item.Sku.Type
-    [FINITE INFINITE]
-
+    ;; TODO: Add recursive gen support. Currently recurses infinitely.
     Category
     [^ID path
      ^String name
      ^String label
-     ^Category ^:many children]])
+     ^Category2 ^:many children]
+
+    Category2
+    [^ID path
+     ^String name
+     ^String label
+     ^Category3 ^:many children]
+
+    Category3
+    [^ID path
+     ^String name
+     ^String label]])
 
 (comment
   #_(def model (gql/schema->model gql-schema))
