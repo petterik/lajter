@@ -1,5 +1,9 @@
 (ns lajter.model.sulo-domain)
 
+(def normal-model
+  '[User [^ID id]
+    Photo [^{:db/unique :db.unique/identity} Path]])
+
 (def model
   '[User
     [^String email

@@ -26,61 +26,86 @@
      (node-meta ?field :tag ?unique-type)
      [(identity :db.unique/identity) ?uniq]]])
 
+(defn field-schema [schema-map fields]
+
+  )
+
 (defn datascript-schema
   "Given a db indexed with a model, returns datascript schema necessary
   to index and query data matching that model."
-  [meta-db]
+  [model-db]
   (let [field-key
         (memoize
           (fn [id]
-            (let [e (d/entity meta-db id)
+            (let [e (d/entity model-db id)
                   ns (get-in e [:model.node/parent
                                 :model.node/symbol])]
               (keyword (name ns) (name (:model.node/symbol e))))))
 
-        ref-map {:db/valueType :db.type/ref}
-        refs (->> (model/q '{:find  [[?field ...]]
-                             :in    [$ %]
-                             :where [(ref-types ?sym)
-                                     [?meta :tag ?sym]
-                                     [?field :model.node/meta ?meta]
-                                     (field ?field)]}
-                           meta-db
-                           ref-type-rule)
-                  (into {} (map (fn [id]
-                                  [(field-key id) ref-map]))))
+        field-schema
+        (fn [schema-map fields]
+          (into {}
+                (map (fn [id] [(field-key id) schema-map]))
+                fields))
 
-        unique (->> (model/q '{:find  [?field ?uniq]
-                               :in    [$ %]
-                               :where [(field ?field)
-                                       (unique ?field ?uniq)]}
-                             meta-db
-                             unique-rule)
-                    (into {} (map (fn [[field uniq]]
-                                    [(field-key field) {:db/unique uniq}]))))
+        refs
+        (field-schema
+          {:db/valueType :db.type/ref}
+          (model/q '{:find  [[?field ...]]
+                     :in    [$ %]
+                     :where [(ref-types ?sym)
+                             [?meta :tag ?sym]
+                             [?field :model.node/meta ?meta]
+                             (field ?field)]}
+                   model-db
+                   ref-type-rule))
 
-        card-map {:db/cardinality :db.cardinality/many}
-        many (->> (model/q '{:find  [[?field ...]]
-                             :in    [$ [[?many-key ?many-val] ...]]
-                             :where [(field ?field)
-                                     (node-meta ?field ?many-key ?many-val)]}
-                           meta-db
-                           [[:many true]
-                            [:db/cardinality :db.cardinality/many]])
-                  (into {} (map (fn [id]
-                                  [(field-key id) card-map]))))
+        many
+        (field-schema
+          {:db/cardinality :db.cardinality/many}
+          (model/q '{:find  [[?field ...]]
+                     :in    [$ [[?many-key ?many-val] ...]]
+                     :where [(field ?field)
+                             (node-meta ?field ?many-key ?many-val)]}
+                   model-db
+                   [[:many true]
+                    [:db/cardinality :db.cardinality/many]]))
 
-        idx-map {:db/index true}
-        index (->> (model/q '{:find  [[?field ...]]
-                              :where [(field ?field)
-                                      (node-meta ?field :db/index true)]}
-                            meta-db)
-                   (into {} (map (fn [id]
-                                   [(field-key id) idx-map]))))]
+        indexed
+        (field-schema
+          {:db/index true}
+          (model/q '{:find  [[?field ...]]
+                     :where [(field ?field)
+                             (node-meta ?field :db/index true)]}
+                   model-db))
+
+        components
+        (field-schema
+          {:db/isComponent true}
+          (model/q
+            '{:find  [[?field ...]]
+              :in    [$ [?component-key ...]]
+              :where [[?meta ?component-key true]
+                      [?field :model.node/meta ?meta]]}
+            model-db
+            [:component :db/isComponent]))
+
+        unique
+        (->> (model/q '{:find  [?field ?uniq]
+                        :in    [$ %]
+                        :where [(field ?field)
+                                (unique ?field ?uniq)]}
+                      model-db
+                      unique-rule)
+             (into {} (map (fn [[field uniq]]
+                             [(field-key field) {:db/unique uniq}]))))]
 
     ;; Creates a map for each schema and field. Merges them at the end.
     ;; Refs
     ;; Unique
     ;; Many
     ;; db/index
-    (merge-with merge (sorted-map) refs unique many index)))
+    (merge-with merge (sorted-map) refs unique many indexed components)))
+
+(defn with-model [db model-db data]
+  (d/db-with db (sequence cat data)))

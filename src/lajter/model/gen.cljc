@@ -75,9 +75,10 @@
                        {:sym sym}))))
         field-gen
         (fn self [[field sym]]
-          (if-let [fields (not-empty (get types sym))]
-            [field (apply gen/hash-map (mapcat self fields))]
-            [field (known-gen field sym)]))]
+          (let [v (if-let [fields (not-empty (get types sym))]
+                    (apply gen/hash-map (mapcat self fields))
+                    (known-gen field sym))]
+            [(keyword field) v]))]
     (second
       (field-gen [nil root-sym]))))
 
