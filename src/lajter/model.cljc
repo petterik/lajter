@@ -213,9 +213,9 @@
   Returns the input and query with rules added to them."
   [query-map inputs rules]
   (let [inputs (vec inputs)
-        rule-idx (find-index #{'%} inputs)
+        rule-idx (find-index #{'%} (rest (:in query-map)))
         inputs (if rule-idx
-                 (update rule-idx into rules)
+                 (update inputs rule-idx (partial into rules))
                  (into inputs [rules]))
         in (cond-> (or (some-> (:in query-map) (not-empty) (vec))
                        '[$])
@@ -231,6 +231,8 @@
   '[[(root-node ?e ?sym)
      [?e :model.node/symbol ?sym]
      [(missing? $ ?e :model.node/parent)]]
+    [(field ?field)
+     [?field :model.node/parent _]]
     ;; Bind k and v to attributes in node's meta
     [(node-meta ?node ?meta-k ?meta-v)
      [?node :model.node/meta ?meta]

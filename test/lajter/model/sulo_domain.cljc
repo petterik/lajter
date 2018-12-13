@@ -85,7 +85,7 @@
   (def sulo-meta-db (model/index-model (model/init-meta-db) model))
   (gen/entity sulo-meta-db 'User)
 
-  (def data (gen/entities sulo-meta-db '[User Store]))
+  (def data (gen/sample (gen/entities sulo-meta-db '[User Store])))
   (def schema (db/datascript-schema sulo-meta-db))
   (def app-state (-> (d/create-conn schema)
                      (d/db)
