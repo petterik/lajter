@@ -249,11 +249,11 @@
      [(identity ?sym) ?type]]
     ;; Get all the fields for a symbol.
     ;; The fields are the root node selector
-    ;; and the fields tagged with the symbol's selector.
-    [(entity-fields ?sym ?field)
+    ;; or the fields tagged with the symbol's selector.
+    [(type-fields ?sym ?field)
      (root-node ?root ?sym)
      [?field :model.node/parent ?root]]
-    [(entity-fields ?sym ?field)
+    [(type-fields ?sym ?field)
      [?meta :tag ?sym]
      [?tagged :model.node/meta ?meta]
      [?field :model.node/parent ?tagged]]])
@@ -265,3 +265,31 @@
             (dec (count (:in query-map '[$]))))]}
   (let [[inputs query] (query-with-rules query-map inputs query-rules)]
     (apply d/q query model-db inputs)))
+
+(defn full-pattern
+  "Extracts the full pull pattern for a given root symbol."
+  [model-db root-sym]
+  (let [fields (q '{:find  [[?field ...]]
+                    :in    [$ ?sym]
+                    :where [(type-fields ?sym ?field)]}
+                  model-db
+                  root-sym)
+
+        field->children
+        (fn [field]
+          (q '{:find  [[?fields ...]]
+               :in    [$ ?field]
+               :where [(node-type ?field ?ref-type)
+                       (type-fields ?ref-type ?fields)]}
+             model-db
+             field))
+
+        field->pattern
+        (fn self [field]
+          (let [field-name (:model.node/symbol (d/entity model-db field))
+                fields (field->children field)]
+            (cond-> [field-name]
+                    (seq fields)
+                    (conj (into [] (mapcat self) fields)))))]
+
+    [root-sym (into [] (mapcat field->pattern) fields)]))

@@ -83,14 +83,23 @@
                                      (into a b)
                                      (or b a)))}))))))))
 
-  (testing "Entity fields"
+  (testing "Type fields - Getting the fields for a type"
     (let [model '[Person
                   [name
-                   ^Person friends [name age]]]]
-      (is (= '#{[name] [friends] [age]}
-          (model/q '{:find  [?field-name]
-                     :in    [$ ?sym]
-                     :where [(entity-fields ?sym ?field)
-                             [?field :model.node/symbol ?field-name]]}
-                   (index-model meta-db model)
-                   'Person))))))
+                   ^Person friends [name age]
+                   ^Person.Wallet wallet [^Integer amount]]]]
+      (is (= '#{[name] [friends] [wallet] [age]}
+             (model/q '{:find  [?field-name]
+                        :in    [$ ?sym]
+                        :where [(type-fields ?sym ?field)
+                                [?field :model.node/symbol ?field-name]]}
+                      (index-model meta-db model)
+                      'Person)))
+      (is (= '[amount Integer]
+             (model/q '{:find  [[?field-name ?field-type]]
+                        :in    [$ ?sym]
+                        :where [(type-fields ?sym ?field)
+                                [?field :model.node/symbol ?field-name]
+                                (node-type ?field ?field-type)]}
+                      (index-model meta-db model)
+                      'Person.Wallet))))))

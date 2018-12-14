@@ -3,21 +3,7 @@
     [lajter.model :as model]
     [datascript.core :as d]))
 
-(def ref-type-rule
-  "Returns all the reference type symbols. Basically all the
-  types that is defined by the model."
-  '[[(ref-types ?sym)
-     [?field :model.node/parent ?parent]
-     (root-node ?parent ?sym)]
-    ;; For inline definitions of types:
-    ;; TODO: Does this complicate things too much?
-    ;;       Maybe we should take this out of the "spec"?
-    [(ref-types ?sym)
-     [?field :model.node/parent ?parent]
-     [?parent :model.node/parent _]
-     [?parent :model.node/meta ?meta]
-     [?meta :tag ?sym]]])
-
+;; TODO: Could be done with just an OR clause and DataScript 0.17.1
 (def unique-rule
   '[[(unique ?field ?uniq)
      (node-meta ?field :db/unique ?uniq)]
@@ -26,8 +12,8 @@
      (node-meta ?field :tag ?unique-type)
      [(identity :db.unique/identity) ?uniq]]])
 
+;; TODO: What is this doing here?
 (defn field-schema [schema-map fields]
-
   )
 
 (defn datascript-schema
@@ -52,13 +38,8 @@
         (field-schema
           {:db/valueType :db.type/ref}
           (model/q '{:find  [[?field ...]]
-                     :in    [$ %]
-                     :where [(ref-types ?sym)
-                             [?meta :tag ?sym]
-                             [?field :model.node/meta ?meta]
-                             (field ?field)]}
-                   model-db
-                   ref-type-rule))
+                     :where [(type-fields _ ?field)]}
+                   model-db))
 
         many
         (field-schema

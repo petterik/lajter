@@ -27,7 +27,7 @@
   (->> (model/q '{:find  [(pull ?field [:model.node/symbol
                                         {:model.node/meta [:tag]}])]
                   :in    [$ ?sym]
-                  :where [(entity-fields ?sym ?field)]}
+                  :where [(type-fields ?sym ?field)]}
                 model-db
                 type-sym)
        (map (fn [[field]]
