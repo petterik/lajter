@@ -51,6 +51,39 @@
    :model.node/meta   {:db/valueType :db.type/ref}
    :tag               {:db/index true}})
 
+(def query-rules
+  "Rules giving meaning to position and tags of models."
+  ;; Bind ?e to root node matching symbol.
+  '[[(root-node ?e ?sym)
+     [?e :model.node/symbol ?sym]
+     [(missing? $ ?e :model.node/parent)]]
+    [(field ?field)
+     [?field :model.node/parent _]]
+    ;; Bind k and v to attributes in node's meta
+    [(node-meta ?node ?meta-k ?meta-v)
+     [?node :model.node/meta ?meta]
+     [?meta ?meta-k ?meta-v]]
+    ;; Extract type of a node. Either check its meta tag
+    ;; or check whether it's the root node and it is capitalized.
+    [(node-type ?node ?type)
+     (node-meta ?node :tag ?type)]
+    [(node-type ?node ?type)
+     [?node :model.node/symbol ?sym]
+     (root-node ?node ?sym)
+     [?node :model.node/capitalized? ?cap]
+     [(true? ?cap)]
+     [(identity ?sym) ?type]]
+    ;; Get all the fields for a symbol.
+    ;; The fields are the root node selector
+    ;; or the fields tagged with the symbol's selector.
+    [(type-fields ?sym ?field)
+     (root-node ?root ?sym)
+     [?field :model.node/parent ?root]]
+    [(type-fields ?sym ?field)
+     [?meta :tag ?sym]
+     [?tagged :model.node/meta ?meta]
+     [?field :model.node/parent ?tagged]]])
+
 (defn init-meta-db
   ([] (init-meta-db nil))
   ([schema]
@@ -222,41 +255,6 @@
                    (not rule-idx)
                    (into '[%]))]
     [inputs (assoc query-map :in (vec in))]))
-
-(def query-rules
-  "Rules giving meaning to positioning and capitalization of
-  model symbols.
-  Adds access to node meta data"
-  ;; Bind ?e to root node matching symbol.
-  '[[(root-node ?e ?sym)
-     [?e :model.node/symbol ?sym]
-     [(missing? $ ?e :model.node/parent)]]
-    [(field ?field)
-     [?field :model.node/parent _]]
-    ;; Bind k and v to attributes in node's meta
-    [(node-meta ?node ?meta-k ?meta-v)
-     [?node :model.node/meta ?meta]
-     [?meta ?meta-k ?meta-v]]
-    ;; Extract type of a node. Either check its meta tag
-    ;; or check whether it's the root node and it is capitalized.
-    [(node-type ?node ?type)
-     (node-meta ?node :tag ?type)]
-    [(node-type ?node ?type)
-     [?node :model.node/symbol ?sym]
-     (root-node ?node ?sym)
-     [?node :model.node/capitalized? ?cap]
-     [(true? ?cap)]
-     [(identity ?sym) ?type]]
-    ;; Get all the fields for a symbol.
-    ;; The fields are the root node selector
-    ;; or the fields tagged with the symbol's selector.
-    [(type-fields ?sym ?field)
-     (root-node ?root ?sym)
-     [?field :model.node/parent ?root]]
-    [(type-fields ?sym ?field)
-     [?meta :tag ?sym]
-     [?tagged :model.node/meta ?meta]
-     [?field :model.node/parent ?tagged]]])
 
 (defn q
   "Query a model db with some predefined rules."
