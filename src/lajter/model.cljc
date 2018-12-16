@@ -118,6 +118,34 @@
       (:model.node/meta)
       (:db/id)))
 
+(defn- selectors-with-parent-id
+  "Takes a conformed model root and a db, updates the root's selectors
+  to include db/id's of its parents.
+
+  Calls the :missing-id-fn with 1 arg when the node was not found in
+  the db."
+  [meta-db root missing-id-fn]
+  (let [add-node-id
+        (fn self [parent {:keys [sym selectors] :as m}]
+          (let [id (or (find-node-by-parent meta-db sym parent)
+                       (missing-id-fn {:node   m
+                                       :parent parent}))]
+            (cons (assoc m :id id :parent parent)
+                  (mapcat #(self id %) selectors))))
+        id (or (find-root meta-db (:sym root))
+               (missing-id-fn {:node root}))]
+    (-> root
+        (assoc :id id)
+        (update :selectors (partial mapcat #(add-node-id id %))))))
+
+(defn conform-with-parent-ids
+  "Conforms the model adding existing ids to roots and :parent
+  fields to all selectors."
+  [meta-db model missing-id-fn]
+  (into []
+        (map #(selectors-with-parent-id meta-db % missing-id-fn))
+        (s/conform ::model model)))
+
 (defn temp-id []
   (d/tempid :db.part/user))
 
@@ -194,23 +222,6 @@
                     (assoc :model.node/meta
                            (assoc new-meta :db/id meta-id))))))])
 
-(defn- root->txs
-  "Takes a model root and returns itself and its children as
-  DataScript entities.
-  Looks up already existing entities in the db, such that they
-  are merged based on their roots and their parents."
-  [meta-db {:keys [sym selectors] :as m}]
-  (let [add-node-id
-        (fn self [parent {:keys [sym selectors] :as m}]
-          (let [id (or (find-node-by-parent meta-db sym parent)
-                       (temp-id))]
-            (cons (assoc m :id id :parent parent)
-                  (mapcat #(self id %) selectors))))
-        id (or (find-root meta-db sym)
-               (temp-id))]
-    (cons (assoc m :id id)
-          (mapcat #(add-node-id id %) selectors))))
-
 (defn index-model
   "Takes a meta-db and a model conforming to ::model.
   Returns a new meta-db with the model indexed and merged with
@@ -223,13 +234,15 @@
    (index-model meta-db model {}))
   ([meta-db model {:keys [pipeline pipeline-opts]}]
    (let [pipeline (comp-pipeline default-pipeline pipeline)]
-     (reduce (fn [meta-db root]
-               (let [xf (apply comp (pipeline (assoc pipeline-opts :db meta-db)))]
-                 (->> (root->txs meta-db root)
-                      (sequence xf)
-                      (d/db-with meta-db))))
-             meta-db
-             (s/conform ::model model)))))
+     (reduce
+       (fn [meta-db root]
+         (let [xf (apply comp (pipeline (assoc pipeline-opts :db meta-db)))
+               root (selectors-with-parent-id meta-db root (fn [_] (temp-id)))]
+           (->> (cons root (:selectors root))
+                (sequence xf)
+                (d/db-with meta-db))))
+       meta-db
+       (s/conform ::model model)))))
 
 (defn- find-index
   "Finds the first index where pred is truthy in coll."

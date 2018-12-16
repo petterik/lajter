@@ -12,6 +12,15 @@
      (node-meta ?field :tag ?unique-type)
      [(identity :db.unique/identity) ?uniq]]])
 
+(def ref-type-rule
+  "A field is of reference type if the field is parent
+  to other field nodes, or if the type of the field is
+  a root node."
+  '[#_[(ref-type ?type ?field)
+     [_ :model.node/parent ?field]]
+    [(ref-type ?type ?field)
+     (root-node _ ?type)]])
+
 ;; TODO: What is this doing here?
 (defn field-schema [schema-map fields]
   )
@@ -38,8 +47,12 @@
         (field-schema
           {:db/valueType :db.type/ref}
           (model/q '{:find  [[?field ...]]
-                     :where [(type-fields _ ?field)]}
-                   model-db))
+                     :in    [$ %]
+                     :where [(type-fields ?type _)
+                             (node-type ?field ?type)
+                             (field ?field)]}
+                   model-db
+                   ref-type-rule))
 
         many
         (field-schema
@@ -89,4 +102,4 @@
     (merge-with merge (sorted-map) refs unique many indexed components)))
 
 (defn with-model [db model-db data]
-  (d/db-with db (sequence cat data)))
+  (d/db-with db data))
