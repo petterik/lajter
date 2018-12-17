@@ -6,7 +6,9 @@
     [lajter.model.db :as db]))
 
 (defn full-pattern
-  "Extracts the full pull pattern for a given root symbol."
+  "Given root symbol and a db with model indexed, extracts the
+   full pull pattern for it, where the pattern conforms to ::model/model
+   and not a datascript pattern."
   [model-db root-sym]
   (let [fields (model/q '{:find  [[?field ...]]
                           :in    [$ ?sym]
@@ -33,41 +35,57 @@
 
     [root-sym (into [] (mapcat field->pattern) fields)]))
 
-(defn pull [{:keys [model-db db]} pattern eid]
-  (let [conformed (model/conform-with-parent-ids
-                    model-db
-                    ;; Pattern must be merged at this point.
-                    ;; Wait, what's the point of going from
-                    ;; merged pattern -> pattern, just to do pull?
-                    ;; We should be able to do it from its db form.
-                    ;; hmm.
-                    ;; ^^^ Continue here.
-                    pattern
-                    #(throw (ex-info "Unable to find node in model-db" %)))
-
-        field-type
-        (fn [{:keys [parent sym]}]
-          (model/q
-            '{:find  [?type .]
-              :in    [$ ?parent ?sym]
-              :where [[?field :model.node/parent ?parent]
-                      [?field :model.node/symbol ?sym]
-                      (node-type ?field ?type)]}
-            model-db
-            parent
-            sym))
-
-        node->pattern
-        (fn self [{:keys [sym selectors] :as node}]
-          (let [k (keyword (name (field-type node)) (name sym))]
+(defn keywordize-pattern
+  "Takes a pattern and adds namespaced keywords to it such that
+  it can be used with pull."
+  [model-db pattern]
+  (let [entity->field-types
+        (fn [entity-type]
+          (into {} (model/q '{:find  [?field-name ?field-type]
+                              :in    [$ ?type]
+                              :where [(type-fields ?type ?field)
+                                      [?field :model.node/symbol ?field-name]
+                                      (node-type ?field ?field-type)]}
+                            model-db
+                            entity-type)))
+        ;; Takes a field and the type of the entity where it
+        ;; comes from, returns either just the key or pull-pattern
+        ;; join with the key and its selection.
+        field->pattern
+        (fn self [{:keys [field-types entity-type sym selectors]}]
+          (let [field-name sym
+                field-type (get field-types field-name)
+                types (entity->field-types field-type)
+                k (keyword (name entity-type) (name field-name))]
             (cond-> k
                     (seq selectors)
-                    (hash-map (mapv self selectors)))))
-
-        root->pattern
-        (fn [{:keys [selectors]}]
-          (mapv node->pattern selectors))]
+                    (hash-map
+                      (into []
+                            (comp
+                              (map #(assoc % :entity-type field-type
+                                             :field-types types))
+                              (map self))
+                            selectors)))))]
 
     (into []
-          (map (juxt :sym root->pattern))
-          conformed)))
+          (comp
+            (mapcat (fn [{:keys [sym selectors] :as root}]
+                      (let [types (entity->field-types sym)]
+                        (map (fn [node]
+                               (assoc node :field-types types
+                                           :entity-type sym))
+                             selectors))))
+            (map field->pattern))
+          (s/conform ::model/model pattern))))
+
+(defn pull
+  "Pulls data from the data db in the shape of the pattern."
+  [{:keys [model-db db]} pattern eid]
+  (d/pull db (keywordize-pattern model-db pattern) eid))
+
+(defn pull-many
+  "Takes model and data db, a pattern conforming to ::model/model
+  and entities to pull. Pulls the data from the data db in the
+  shape of the pattern."
+  [{:keys [model-db db]} pattern eids]
+  (d/pull-many db (keywordize-pattern model-db pattern) eids))

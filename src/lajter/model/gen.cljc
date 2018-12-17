@@ -87,7 +87,7 @@
           (let [v (if-let [fields (not-empty (get types sym))]
                     (apply gen/hash-map (mapcat self fields))
                     (known-gen field sym))
-                v (cond-> v (many-field? field) (gen/vector 0 3))]
+                v (cond-> v (many-field? field) (gen/vector 1 3))]
             [(keyword field) v]))]
     (second
       (field-gen [nil root-sym]))))
