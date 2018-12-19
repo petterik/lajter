@@ -89,27 +89,43 @@
   ([schema]
    (d/db (d/create-conn (merge-with merge model-schema schema)))))
 
+(defn temp-id []
+  (d/tempid :db.part/user))
+
+(defn temp-id? [id]
+  (neg? id))
+
 (declare q)
 
 (defn find-root
   "Returns db/id of root node for a symbol."
   [meta-db sym]
-  (q '{:find  [?e .]
-       :in    [$ ?sym]
-       :where [(root-node ?e ?sym)]}
-     meta-db
-     sym))
+  ;; Hand rolling this query makes indexing about 2x faster
+  #_(q '{:find  [?e .]
+         :in    [$ ?sym]
+         :where [(root-node ?e ?sym)]}
+       meta-db
+       sym)
+  (first
+    (eduction
+      (map :e)
+      (filter (fn missing? [e]
+                (empty?
+                  (d/datoms meta-db :eavt e :model.node/parent))))
+      (take 1)
+      (d/datoms meta-db :avet :model.node/symbol sym))))
 
 (defn find-node-by-parent
   "Returns db/id of root node for a symbol and parent."
   [meta-db sym parent]
-  (q '{:find  [?e .]
-       :in    [$ ?sym ?parent]
-       :where [[?e :model.node/parent ?parent]
-               [?e :model.node/symbol ?sym]]}
-     meta-db
-     sym
-     parent))
+  (when-not (temp-id? parent)
+    (d/q '{:find  [?e .]
+           :in    [$ ?sym ?parent]
+           :where [[?e :model.node/parent ?parent]
+                   [?e :model.node/symbol ?sym]]}
+         meta-db
+         sym
+         parent)))
 
 (defn find-meta
   "Returns db/id of meta data entity for a node's db/id."
@@ -131,26 +147,14 @@
                        (missing-id-fn {:node   m
                                        :parent parent}))]
             (cons (assoc m :id id :parent parent)
-                  (mapcat #(self id %) selectors))))
+                  (mapcat #(self id %)
+                          selectors))))
+
         id (or (find-root meta-db (:sym root))
                (missing-id-fn {:node root}))]
     (-> root
         (assoc :id id)
         (update :selectors (partial mapcat #(add-node-id id %))))))
-
-(defn conform-with-parent-ids
-  "Conforms the model adding existing ids to roots and :parent
-  fields to all selectors."
-  [meta-db model missing-id-fn]
-  (into []
-        (map #(selectors-with-parent-id meta-db % missing-id-fn))
-        (s/conform ::model model)))
-
-(defn temp-id []
-  (d/tempid :db.part/user))
-
-(defn temp-id? [id]
-  (neg? id))
 
 (defn comp-pipeline
   "Composes indexing pipelines, calling pipelines functions
@@ -239,7 +243,7 @@
          (let [xf (apply comp (pipeline (assoc pipeline-opts :db meta-db)))
                root (selectors-with-parent-id meta-db root (fn [_] (temp-id)))]
            (->> (cons root (:selectors root))
-                (sequence xf)
+                (into [] xf)
                 (d/db-with meta-db))))
        meta-db
        (s/conform ::model model)))))
