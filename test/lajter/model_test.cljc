@@ -70,14 +70,19 @@
 
       (testing "Merge custom collection"
         (let [model '[Person
-                      ^{:sources [:remote :local]
+                      ^{:in-old  true
+                        :sources [:remote :local]
                         :replace [1 2]} Person
-                      ^{:sources [:github]
+                      ^{:in-new  true
+                        :sources [:github]
                         :replace [3 4]} Person]]
-          (is (= {:sources [:remote :local :github]
+          (is (= {:in-old  true
+                  :in-new  true
+                  :sources [:remote :local :github]
                   :replace [3 4]}
                  (model/q
-                   '{:find  [(pull ?meta [:sources :replace]) .]
+                   '{:find  [(pull ?meta [:in-old :in-new
+                                          :sources :replace]) .]
                      :where [[?e :model.node/keyword :Person]
                              [?e :model.node/meta ?meta]]}
                    (index-model meta-db

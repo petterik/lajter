@@ -117,9 +117,10 @@
 (defn find-meta
   "Returns db/id of meta data entity for a node's db/id."
   [meta-db node-id]
-  (-> (d/entity meta-db node-id)
-      (:model.node/meta)
-      (:db/id)))
+  (when-not (temp-id? node-id)
+    (-> (d/entity meta-db node-id)
+        (:model.node/meta)
+        (:db/id))))
 
 (defn- default-merge-meta-fn
   "Default implementation of handling merge conflicts when
@@ -129,31 +130,29 @@
   (or new-value old-value))
 
 (def plugin:merge-meta
+  "Merging metadata between existing nodes and new ones."
   {:pipeline/fn
    (fn [{:keys [db merge-meta-fn]
          :or   {merge-meta-fn default-merge-meta-fn}
          :as   pipeline-opts}]
-     (map (fn [node]
-            (let [node-meta (:model.node/meta node)
-                  meta-id (or (find-meta db (:db/id node))
-                              (temp-id))
-                  old-meta (d/entity db meta-id)
+     (map
+       (fn [node]
+         (let [meta-id (find-meta db (:db/id node))]
+           (if (or (nil? meta-id) (temp-id? meta-id))
+             node
+             (let [old-meta (into {:db/id meta-id} (d/entity db meta-id))
 
-                  merge-fn
-                  (fn [[k v]]
-                    (if-some [old-v (get old-meta k)]
-                      (let [env (assoc pipeline-opts :k k :node node)]
-                        (merge-meta-fn env old-v v))
-                      v))
+                   merge-fn
+                   (fn [[k v]]
+                     (if-some [old-v (get old-meta k)]
+                       (let [env (assoc pipeline-opts :k k :node node)]
+                         (merge-meta-fn env old-v v))
+                       v))
 
-                  new-meta
-                  (cond->> node-meta
-                           (not (temp-id? meta-id))
-                           (into {} (map (juxt key merge-fn))))]
-              (cond-> node
-                      (seq new-meta)
-                      (assoc :model.node/meta
-                             (assoc new-meta :db/id meta-id)))))))})
+                   new-meta (into old-meta
+                                  (map (juxt key merge-fn))
+                                  (dissoc (:model.node/meta node) :db/id))]
+               (assoc node :model.node/meta new-meta)))))))})
 
 (def default-plugins
   "Plugins added to all model databases. Plugins are used to extend
