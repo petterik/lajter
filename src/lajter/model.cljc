@@ -51,49 +51,160 @@
    :model.node/meta   {:db/valueType :db.type/ref}
    :tag               {:db/index true}})
 
-(def query-rules
-  "Rules giving meaning to position and tags of models."
-  ;; Bind ?e to root node matching symbol.
-  '[[(root-node ?e ?sym)
-     [?e :model.node/symbol ?sym]
-     [(missing? $ ?e :model.node/parent)]]
-    [(field ?field)
-     [?field :model.node/parent _]]
-    ;; Bind k and v to attributes in node's meta
-    [(node-meta ?node ?meta-k ?meta-v)
-     [?node :model.node/meta ?meta]
-     [?meta ?meta-k ?meta-v]]
-    ;; Extract type of a node. Either check its meta tag
-    ;; or check whether it's the root node and it is capitalized.
-    [(node-type ?node ?type)
-     (node-meta ?node :tag ?type)]
-    [(node-type ?node ?type)
-     [?node :model.node/symbol ?sym]
-     (root-node ?node ?sym)
-     [?node :model.node/capitalized? ?cap]
-     [(true? ?cap)]
-     [(identity ?sym) ?type]]
-    ;; Get all the fields for a symbol.
-    ;; The fields are the root node selector
-    ;; or the fields tagged with the symbol's selector.
-    [(type-fields ?sym ?field)
-     (root-node ?root ?sym)
-     [?field :model.node/parent ?root]]
-    [(type-fields ?sym ?field)
-     [?meta :tag ?sym]
-     [?tagged :model.node/meta ?meta]
-     [?field :model.node/parent ?tagged]]])
-
-(defn init-meta-db
-  ([] (init-meta-db nil))
-  ([schema]
-   (d/db (d/create-conn (merge-with merge model-schema schema)))))
-
 (defn temp-id []
   (d/tempid :db.part/user))
 
 (defn temp-id? [id]
   (neg? id))
+
+(def plugin:root-node
+  "Binds entity ?e to the root node with symbol ?sym"
+  {:rule/clauses
+   '[[(root-node ?e ?sym)
+      [?e :model.node/symbol ?sym]
+      [(missing? $ ?e :model.node/parent)]]]})
+
+(def plugin:field
+  "Coerces ?field to be a field, which are any non-root nodes."
+  {:rule/clauses
+   '[[(field ?field)
+      [?field :model.node/parent _]]]})
+
+(def plugin:node-meta
+  "Bind k and v to attributes in node's meta"
+  {:rule/clauses
+   '[[(node-meta ?node ?meta-k ?meta-v)
+      [?node :model.node/meta ?meta]
+      [?meta ?meta-k ?meta-v]]]})
+
+(def plugin:node-type
+  "Extract type of a node. Either check its meta tag
+  or check whether it's the root node and it is capitalized."
+  {:pipeline/fn
+   (let [capitalized?
+         (fn [sym]
+           (let [c (first (name sym))]
+             #?(:clj  (Character/isUpperCase (char c))
+                :cljs (= c (.toUpperCase c)))))]
+     (fn [opts]
+       (map (fn [node]
+              (assoc node :model.node/capitalized?
+                          (capitalized? (:model.node/symbol node)))))))
+
+   :rule/clauses
+   '[[(node-type ?node ?type)
+      (node-meta ?node :tag ?type)]
+     [(node-type ?node ?type)
+      [?node :model.node/symbol ?sym]
+      (root-node ?node ?sym)
+      [?node :model.node/capitalized? ?cap]
+      [(true? ?cap)]
+      [(identity ?sym) ?type]]]})
+
+(def plugin:type-fields
+  "Get all the fields for a symbol.
+  The fields are the root node selector
+  or the fields tagged with the symbol's selector."
+  {:rule/clauses
+   '[[(type-fields ?sym ?field)
+      (root-node ?root ?sym)
+      [?field :model.node/parent ?root]]
+     [(type-fields ?sym ?field)
+      [?meta :tag ?sym]
+      [?tagged :model.node/meta ?meta]
+      [?field :model.node/parent ?tagged]]]})
+
+(defn find-meta
+  "Returns db/id of meta data entity for a node's db/id."
+  [meta-db node-id]
+  (-> (d/entity meta-db node-id)
+      (:model.node/meta)
+      (:db/id)))
+
+(defn- default-merge-meta-fn
+  "Default implementation of handling merge conflicts when
+  merging meta data for a node. Returning the new value if
+  not nil."
+  [env old-value new-value]
+  (or new-value old-value))
+
+(def plugin:merge-meta
+  {:pipeline/fn
+   (fn [{:keys [db merge-meta-fn]
+         :or   {merge-meta-fn default-merge-meta-fn}
+         :as   pipeline-opts}]
+     (map (fn [node]
+            (let [node-meta (:model.node/meta node)
+                  meta-id (or (find-meta db (:db/id node))
+                              (temp-id))
+                  old-meta (d/entity db meta-id)
+
+                  merge-fn
+                  (fn [[k v]]
+                    (if-some [old-v (get old-meta k)]
+                      (let [env (assoc pipeline-opts :k k :node node)]
+                        (merge-meta-fn env old-v v))
+                      v))
+
+                  new-meta
+                  (cond->> node-meta
+                           (not (temp-id? meta-id))
+                           (into {} (map (juxt key merge-fn))))]
+              (cond-> node
+                      (seq new-meta)
+                      (assoc :model.node/meta
+                             (assoc new-meta :db/id meta-id)))))))})
+
+(def default-plugins
+  "Plugins added to all model databases. Plugins are used to extend
+  and give meaning to positioning and metadata of the model.
+
+  Plugins consist of :db/schema :rule/clauses and :pipeline/fn.
+  schema and rule clauses are used for query and transacting of model.
+  pipeline/fn is called as nodes are being transacted to the model db.
+  "
+  [plugin:root-node
+   plugin:field
+   plugin:node-meta
+   plugin:node-type
+   plugin:type-fields
+   plugin:merge-meta])
+
+(defn impl-entity
+  "Returns the implementation detail entity containing rules and pipelines"
+  [meta-db]
+  (d/entity meta-db [:model.impl/id 1]))
+
+(defn- update-impl [meta-db k f & args]
+  (let [impl (impl-entity meta-db)
+        v (get impl k)]
+    (d/db-with meta-db [[:db/add (:db/id impl) k (apply f v args)]])))
+
+(defn db-with-plugins
+  "Returns a db with plugins added to it."
+  ([meta-db plugins]
+   (let [schema (transduce (map :db/schema)
+                           (partial merge-with merge)
+                           (:schema meta-db)
+                           plugins)
+         db (cond
+              (nil? meta-db) (d/init-db [] schema)
+              (seq schema) (d/init-db (d/datoms meta-db :eavt) schema)
+              :else meta-db)]
+     (-> db
+         (update-impl :model.impl/rules into (mapcat :rule/clauses) plugins)
+         (update-impl :model.impl/pipeline into (keep :pipeline/fn) plugins)))))
+
+(defn init-meta-db
+  ([] (init-meta-db nil))
+  ([plugins]
+   (let [db (-> (d/empty-db {:model.impl/id {:db/unique :db.unique/value}})
+                (d/db-with [{:model.impl/id       1
+                             :model.impl/rules    []
+                             :model.impl/pipeline []}]))]
+     (db-with-plugins db (concat [{:db/schema model-schema}]
+                                 default-plugins
+                                 plugins)))))
 
 (declare q)
 
@@ -127,104 +238,40 @@
          sym
          parent)))
 
-(defn find-meta
-  "Returns db/id of meta data entity for a node's db/id."
-  [meta-db node-id]
-  (-> (d/entity meta-db node-id)
-      (:model.node/meta)
-      (:db/id)))
-
 (defn- selectors-with-parent-id
   "Takes a conformed model root and a db, updates the root's selectors
   to include db/id's of its parents.
 
   Calls the :missing-id-fn with 1 arg when the node was not found in
   the db."
-  [meta-db root missing-id-fn]
+  [meta-db root]
   (let [add-node-id
         (fn self [parent {:keys [sym selectors] :as m}]
           (let [id (or (find-node-by-parent meta-db sym parent)
-                       (missing-id-fn {:node   m
-                                       :parent parent}))]
+                       (temp-id))]
             (cons (assoc m :id id :parent parent)
                   (mapcat #(self id %)
                           selectors))))
 
         id (or (find-root meta-db (:sym root))
-               (missing-id-fn {:node root}))]
+               (temp-id))]
     (-> root
         (assoc :id id)
         (update :selectors (partial mapcat #(add-node-id id %))))))
 
-(defn comp-pipeline
-  "Composes indexing pipelines, calling pipelines functions
-  from left to right (like transducers)."
-  [& pipelines]
-  (fn [opts]
-    (into []
-          (comp (filter some?)
-                (mapcat #(% opts)))
-          pipelines)))
-
-(defn default-merge-meta-fn
-  "Default implementation of handling merge conflicts when
-  merging meta data for a node. Returning the new value if
-  not nil."
-  [env old-value new-value]
-  (or new-value old-value))
-
-(defn default-pipeline
-  "Pipeline taking a flattened model, linked by db ids and
-  returns nodes to transacted in to the model database.
-
-  The idea is that we can use this pipeline to hook in to
-  whatever we might need in the future as far as merging
-  data goes."
-  [{:keys [db merge-meta-fn]
-    :or   {merge-meta-fn default-merge-meta-fn}
-    :as   pipeline-opts}]
-  [(map (fn [{:keys [id sym parent]}]
-          (let [m (meta sym)]
-            (cond-> {:db/id             id
-                     :model.node/symbol sym}
-                    (seq m)
-                    (assoc :model.node/meta m)
-                    (some? parent)
-                    (assoc :model.node/parent parent)))))
-
-   ;; needs is-capitalized attribute to figure out whether
-   ;; the node is its own type definition or not.
-   (let [capitalized?
-         (fn [sym]
-           (let [c (first (name sym))]
-             #?(:clj  (Character/isUpperCase (char c))
-                :cljs (= c (.toUpperCase c)))))]
-     (map (fn [node]
-            (assoc node :model.node/capitalized?
-                        (capitalized? (:model.node/symbol node))))))
-
-   ;; Merge metadata.
-   (map (fn [node]
-          (let [node-meta (:model.node/meta node)
-                meta-id (or (find-meta db (:db/id node))
-                            (temp-id))
-                old-meta (d/entity db meta-id)
-
-                merge-fn
-                (fn [[k v]]
-                  (if-some [old-v (get old-meta k)]
-                    (let [env (assoc pipeline-opts :k k :node node)]
-                      (merge-meta-fn env old-v v))
-                    v))
-
-                new-meta
-                (cond->> node-meta
-                         (not (temp-id? meta-id))
-                         (into {} (map (juxt key merge-fn))))]
-            (cond-> node
-                    (seq new-meta)
-                    (assoc :model.node/meta
-                           (assoc new-meta :db/id meta-id))))))])
+(defn root->node-seq
+  "Takes a conformed model root and returns a seq of model nodes to
+  be transacted in to a db."
+  [root]
+  (map (fn [{:keys [id sym parent]}]
+         (let [m (meta sym)]
+           (cond-> {:db/id             id
+                    :model.node/symbol sym}
+                   (seq m)
+                   (assoc :model.node/meta m)
+                   (some? parent)
+                   (assoc :model.node/parent parent))))
+       (cons root (:selectors root))))
 
 (defn index-model
   "Takes a meta-db and a model conforming to ::model.
@@ -236,13 +283,16 @@
   * A node or root cannot have two children with the same symbol."
   ([meta-db model]
    (index-model meta-db model {}))
-  ([meta-db model {:keys [pipeline pipeline-opts]}]
-   (let [pipeline (comp-pipeline default-pipeline pipeline)]
+  ([meta-db model {:keys [pipeline-opts]}]
+   (let [impl (impl-entity meta-db)
+         pipeline-fn (fn [opts]
+                       (map #(% opts) (:model.impl/pipeline impl)))]
      (reduce
        (fn [meta-db root]
-         (let [xf (apply comp (pipeline (assoc pipeline-opts :db meta-db)))
-               root (selectors-with-parent-id meta-db root (fn [_] (temp-id)))]
-           (->> (cons root (:selectors root))
+         (let [xf (apply comp (pipeline-fn (assoc pipeline-opts :db meta-db)))]
+           (->> root
+                (selectors-with-parent-id meta-db)
+                (root->node-seq)
                 (into [] xf)
                 (d/db-with meta-db))))
        meta-db
@@ -278,5 +328,6 @@
   [query-map model-db & inputs]
   {:pre [(= (count inputs)
             (dec (count (:in query-map '[$]))))]}
-  (let [[inputs query] (query-with-rules query-map inputs query-rules)]
+  (let [query-rules (:model.impl/rules (impl-entity model-db))
+        [inputs query] (query-with-rules query-map inputs query-rules)]
     (apply d/q query model-db inputs)))

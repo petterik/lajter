@@ -3,18 +3,23 @@
     [clojure.test :refer [deftest is are testing]]
     [lajter.model :as model]))
 
+(def plugin:node-keyword
+  {:db/schema
+   {:model.node/keyword {:db/index true}}
+   :pipeline/fn
+   (fn [_]
+     (map (fn [{:model.node/keys [symbol] :as node}]
+            (assoc node :model.node/keyword (keyword symbol)))))})
+
 (defn index-model
   ([db model]
     (index-model db model nil))
   ([db model pipeline-opts]
-   (let [pipeline
-         (fn [_]
-           [(map (fn [{:model.node/keys [symbol] :as node}]
-                   (assoc node :model.node/keyword (keyword symbol))))])]
-     (model/index-model db model {:pipeline pipeline
-                                  :pipeline-opts pipeline-opts}))))
+   (-> db
+       (model/db-with-plugins [plugin:node-keyword])
+       (model/index-model model {:pipeline-opts pipeline-opts}))))
 
-(def meta-db (model/init-meta-db {:model.node/keyword {:db/index true}}))
+(def meta-db (model/init-meta-db))
 
 (deftest model-index-test
   (testing "Root level capitalized symbols are themselves its type."
