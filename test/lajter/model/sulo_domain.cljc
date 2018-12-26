@@ -7,24 +7,24 @@
 (def model
   '[User
     [^String email
-     ^User.Cart ^:component cart
-     ^User.Profile ^:component profile]
+     ^User.Cart ^:db/isComponent cart
+     ^User.Profile ^:db/isComponent profile]
 
     User.Profile
     [^String name
      ^Photo photo]
 
     User.Cart
-    [^Store.Item ^:many items]
+    [^Store.Item ^:db.cardinality/many items]
 
     Photo
     [^String path]
 
     Store
     [^UUID uuid
-     ^Store.Owner ^:many ^:component owners
-     ^Store.Item ^:many items
-     ^Store.Section ^:many ^:component sections]
+     ^Store.Owner ^:db.cardinality/many ^:db/isComponent owners
+     ^Store.Item ^:db.cardinality/many items
+     ^Store.Section ^:db.cardinality/many ^:db/isComponent sections]
 
     Store.Owner
     [^User user
@@ -35,9 +35,9 @@
      ^String name
      ^BigDecimal price
      ^Category category
-     ^Store.Section ^:many ^:component section
+     ^Store.Section ^:db.cardinality/many ^:db/isComponent section
      ^Photo photo
-     ^Store.Item.Sku ^:many ^:component skus]
+     ^Store.Item.Sku ^:db.cardinality/many ^:db/isComponent skus]
 
     Store.Section
     [^String label
@@ -45,7 +45,7 @@
 
     Store.Item.Sku
     [^String variation
-     ^Store.Item.Sku.Inventory ^:component inventory]
+     ^Store.Item.Sku.Inventory ^:db/isComponent inventory]
 
     Store.Item.Sku.Inventory
     [^Keyword
@@ -63,13 +63,13 @@
     [^ID path
      ^String name
      ^String label
-     ^Category2 ^:many children]
+     ^Category2 ^:db.cardinality/many children]
 
     Category2
     [^ID path
      ^String name
      ^String label
-     ^Category3 ^:many children]
+     ^Category3 ^:db.cardinality/many children]
 
     Category3
     [^ID path

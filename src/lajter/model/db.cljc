@@ -62,7 +62,7 @@
                      :where [(field ?field)
                              (node-meta ?field ?many-key ?many-val)]}
                    model-db
-                   [[:many true]
+                   [[:db.cardinality/many true]
                     [:db/cardinality :db.cardinality/many]]))
 
         indexed

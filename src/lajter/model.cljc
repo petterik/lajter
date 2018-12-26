@@ -16,7 +16,7 @@
   ;; Symbols can have meta
   [^:root Person
    [^String full-name
-    ^Person ^:many friends [full-name]]]
+    ^Person ^:db.cardinality/many friends [full-name]]]
 
   Indexing is extensible. Add fields by passing
   :pipeline with optional :pipeline-opts to

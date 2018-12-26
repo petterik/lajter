@@ -67,8 +67,6 @@
   [model-db root-sym]
   (let [types (type-map model-db root-sym)
 
-        ;; TODO: Handle the ^:many metadata, for generating a collection
-        ;; of things.
         known-gen
         (fn [field sym]
           (or ((get known-generators sym) field)
@@ -79,7 +77,7 @@
         many-field?
         (fn [field]
           (let [m (meta field)]
-            (or (:many m)
+            (or (true? (:db.cardinality/many m))
                 (= (:db/cardinality m) :db.cardinality/many))))
 
         field-gen
