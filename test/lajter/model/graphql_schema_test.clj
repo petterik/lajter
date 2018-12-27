@@ -34,7 +34,7 @@
                     (graphql/schema->model))]
       (time
         (let [model-db (model/index-model db model)]
-          (time (db/datascript-schema model-db)))))))
+          (count (time (db/datascript-schema model-db))))))))
 
 #_(defn profile-indexing []
   (let [s (gql-schema)

@@ -120,13 +120,9 @@
 
    :rule/clauses
    '[[(node-type ?node ?type)
-      (node-meta ?node :tag ?type)]
-     [(node-type ?node ?type)
-      [?node :model.plugin.node-type/capitalized? ?cap]
-      ;; We don't add the attribute unless it's capitalized.
-      ;; so we can skip this clause
-      #_[(true? ?cap)]
-      [?node :model.node/symbol ?type]]]})
+      (or (node-meta ?node :tag ?type)
+          (and [?node :model.plugin.node-type/capitalized? _]
+               [?node :model.node/symbol ?type]))]]})
 
 (def plugin:type-fields
   "Get all the fields for a symbol.

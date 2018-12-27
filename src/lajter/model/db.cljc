@@ -30,7 +30,7 @@
         ref-types
         (model/q
           '{:find  [[?type ...]]
-            :where [(type-fields ?type ?field)]}
+            :where [(type-fields ?type _)]}
           model-db)
 
         refs
