@@ -3,40 +3,42 @@
     [lajter.model :as model]
     [datascript.core :as d]))
 
-(defmacro timing [label & body])
-
 (defn datascript-schema
   "Given a db indexed with a model, returns datascript schema necessary
   to index and query data matching that model."
   [model-db]
-  (let [field-key
+  (let [field-entity
         (memoize
           (fn [id]
-            (let [e (d/entity model-db id)
-                  ns (get-in e [:model.node/parent :model.node/symbol])]
-              (keyword (name ns) (name (:model.node/symbol e))))))
+            (let [e (d/entity model-db id)]
+              (when (:model.node/parent e)
+                e))))
+
+        field-key
+        (fn [e]
+          (let [ns (get-in e [:model.node/parent :model.node/symbol])]
+            (keyword (name ns) (name (:model.node/symbol e)))))
 
         field-schema
         (fn [schema-map fields]
           (into {}
-                (map (fn [id] [(field-key id) schema-map]))
+                (comp (keep field-entity)
+                      (map (fn [e] [(field-key e) schema-map])))
                 fields))
 
         ;; ref-types are types that have fields.
         ref-types
-        (set
-          (model/q '{:find  [[?type ...]]
-                     :where [(type-fields ?type ?field)]}
-                   model-db))
+        (model/q
+          '{:find  [[?type ...]]
+            :where [(type-fields ?type ?field)]}
+          model-db)
 
         refs
         (field-schema
           {:db/valueType :db.type/ref}
           (model/q '{:find  [[?field ...]]
-                     :in    [$ ?ref-types]
-                     :where [(node-type ?field ?type)
-                             [(?ref-types ?type)]
-                             (field ?field)]}
+                     :in    [$ [?type ...]]
+                     :where [(node-type ?field ?type)]}
                    model-db
                    ref-types))
 
@@ -44,36 +46,33 @@
         (field-schema
           {:db/cardinality :db.cardinality/many}
           (model/q '{:find  [[?field ...]]
-                     :in    [$ [[?many-key ?many-val] ...]]
-                     :where [(node-meta ?field ?many-key ?many-val)
-                             (field ?field)]}
-                   model-db
-                   {:db.cardinality/many true
-                    :db/cardinality      :db.cardinality/many}))
+                     :where [(or [?meta :db.cardinality/many true]
+                                 [?meta :db/cardinality :db.cardinality/many])
+                             [?field :model.node/meta ?meta]]}
+                   model-db))
 
         indexed
         (field-schema
           {:db/index true}
           (model/q '{:find  [[?field ...]]
-                     :where [(node-meta ?field :db/index true)
-                             (field ?field)]}
+                     :where [(node-meta ?field :db/index true)]}
                    model-db))
 
         components
         (field-schema
           {:db/isComponent true}
           (model/q '{:find  [[?field ...]]
-                     :where [(node-meta ?field :db/isComponent true)
-                             (field ?field)]}
+                     :where [(node-meta ?field :db/isComponent true)]}
                    model-db))
 
         unique
         (->> (model/q '{:find  [?field ?uniq]
-                        :where [(node-meta ?field :db/unique ?uniq)
-                                (field ?field)]}
+                        :where [(node-meta ?field :db/unique ?uniq)]}
                       model-db)
-             (into {} (map (fn [[field uniq]]
-                             [(field-key field) {:db/unique uniq}]))))]
+             (into {}
+                   (keep (fn [[field uniq]]
+                           (when-let [e (field-entity field)]
+                             [(field-key e) {:db/unique uniq}])))))]
 
     ;; Creates a map for each schema and field. Merges them at the end.
     ;; Refs

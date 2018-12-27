@@ -59,23 +59,18 @@
 
 (def plugin:root-node
   "Binds entity ?e to the root node with symbol ?sym"
-  {:rule/clauses
-   '[[(root-node ?e ?sym)
-      [?e :model.node/symbol ?sym]
-      [(missing? $ ?e :model.node/parent)]
-      ;; TODO: Benchmark whether this optimization helps.
-      ;; Consider the indexing time as well as pull/schema/gen.
-      #_#_
-          [?e :model.node/root? true]
-          [?e :model.node/symbol ?sym]
-      ]]
-   #_#_
+  {:db/schema
+   {:model.plugin.root-node/root? {:db/index true}}
    :pipeline/fn
    (fn [_]
      (map (fn [node]
             (cond-> node
                     (not (:model.node/parent node))
-                    (assoc :model.node/root? true)))))})
+                    (assoc :model.plugin.root-node/root? true)))))
+   :rule/clauses
+   '[[(root-node ?e ?sym)
+      [?e :model.plugin.root-node/root? true]
+      [?e :model.node/symbol ?sym]]]})
 
 (def identity-plugin
   {:db/schema {}
