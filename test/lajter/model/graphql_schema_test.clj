@@ -4,7 +4,8 @@
     [clojure.java.io :as jio]
     [clojure.data.json :as json]
     [lajter.model :as model]
-    [lajter.model.graphql :as graphql]))
+    [lajter.model.graphql :as graphql]
+    [lajter.model.db :as db]))
 
 (def gql-schema-file
   ^{:doc    "This schema was acquired by introspecting github's
@@ -32,8 +33,9 @@
                     (get-in [:data :__schema :types])
                     (graphql/schema->model))]
       (time
-        (do (model/index-model db model)
-            nil)))))
+        (let [model-db (model/index-model db model)]
+          (time (db/datascript-schema model-db))
+          nil)))))
 
 #_(defn profile-indexing []
   (let [s (gql-schema)

@@ -132,10 +132,12 @@
                                 (select-keys gql-type [:gql.type/required-list?
                                                        :gql.type/required-value?]))
 
-                  {:gql.type/keys [name list?]} gql-type
+                  {:gql.type/keys [name kind list?]} gql-type
                   new-met (cond-> met
                                   (some? name)
                                   (assoc :tag name)
+                                  (contains? '#{UUID ID} name)
+                                  (assoc :db/unique :db.unique/identity)
                                   (some? list?)
                                   (assoc :db/cardinality :db.cardinality/many)
                                   (seq req-map)
