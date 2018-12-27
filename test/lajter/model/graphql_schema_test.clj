@@ -26,10 +26,14 @@
                              :else v)))))
 
 (defn gql-schema->model-db []
-  (-> (gql-schema)
-      (get-in [:data :__schema :types])
-      (graphql/schema->model)
-      (->> (model/index-model (model/init-meta-db)))))
+  (time
+    (let [db (model/init-meta-db [graphql/plugin:graphql])
+          model (-> (gql-schema)
+                    (get-in [:data :__schema :types])
+                    (graphql/schema->model))]
+      (time
+        (do (model/index-model db model)
+            nil)))))
 
 #_(defn profile-indexing []
   (let [s (gql-schema)

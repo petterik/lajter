@@ -59,8 +59,9 @@
           {:db/cardinality :db.cardinality/many}
           (model/q '{:find  [[?field ...]]
                      :in    [$ [[?many-key ?many-val] ...]]
-                     :where [(field ?field)
-                             (node-meta ?field ?many-key ?many-val)]}
+                     :where [[?meta ?many-key ?many-val]
+                             [?field :model.node/meta ?meta]
+                             (field ?field)]}
                    model-db
                    [[:db.cardinality/many true]
                     [:db/cardinality :db.cardinality/many]]))
@@ -69,8 +70,8 @@
         (field-schema
           {:db/index true}
           (model/q '{:find  [[?field ...]]
-                     :where [(field ?field)
-                             (node-meta ?field :db/index true)]}
+                     :where [(node-meta ?field :db/index true)
+                             (field ?field)]}
                    model-db))
 
         components
@@ -78,17 +79,15 @@
           {:db/isComponent true}
           (model/q
             '{:find  [[?field ...]]
-              :in    [$ [?component-key ...]]
-              :where [[?meta ?component-key true]
+              :where [[?meta :db/isComponent true]
                       [?field :model.node/meta ?meta]]}
-            model-db
-            [:component :db/isComponent]))
+            model-db))
 
         unique
         (->> (model/q '{:find  [?field ?uniq]
                         :in    [$ %]
-                        :where [(field ?field)
-                                (unique ?field ?uniq)]}
+                        :where [(unique ?field ?uniq)
+                                (field ?field)]}
                       model-db
                       unique-rule)
              (into {} (map (fn [[field uniq]]

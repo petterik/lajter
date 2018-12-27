@@ -62,7 +62,35 @@
   {:rule/clauses
    '[[(root-node ?e ?sym)
       [?e :model.node/symbol ?sym]
-      [(missing? $ ?e :model.node/parent)]]]})
+      [(missing? $ ?e :model.node/parent)]
+      ;; TODO: Benchmark whether this optimization helps.
+      ;; Consider the indexing time as well as pull/schema/gen.
+      #_#_
+          [?e :model.node/root? true]
+          [?e :model.node/symbol ?sym]
+      ]]
+   #_#_
+   :pipeline/fn
+   (fn [_]
+     (map (fn [node]
+            (cond-> node
+                    (not (:model.node/parent node))
+                    (assoc :model.node/root? true)))))})
+
+(def identity-plugin
+  {:db/schema {}
+   :rule/clauses []
+   :pipeline/fn (fn [opts] identity)})
+
+(defn merge-plugins [& plugins]
+  {:db/schema    (transduce (map :db/schema)
+                            (partial merge-with merge)
+                            {}
+                            plugins)
+   :rule/clauses (into [] (mapcat :rule/clauses) plugins)
+   :pipeline/fn  (let [fns (keep :pipeline/fn plugins)]
+                   (fn [opts]
+                     (apply comp (map #(% opts) fns))))})
 
 (def plugin:field
   "Coerces ?field to be a field, which are any non-root nodes."
@@ -74,8 +102,8 @@
   "Bind k and v to attributes in node's meta"
   {:rule/clauses
    '[[(node-meta ?node ?meta-k ?meta-v)
-      [?node :model.node/meta ?meta]
-      [?meta ?meta-k ?meta-v]]]})
+      [?meta ?meta-k ?meta-v]
+      [?node :model.node/meta ?meta]]]})
 
 (def plugin:node-type
   "Extract type of a node. Either check its meta tag
@@ -87,19 +115,23 @@
              #?(:clj  (Character/isUpperCase (char c))
                 :cljs (= c (.toUpperCase c)))))]
      (fn [opts]
-       (map (fn [node]
-              (assoc node :model.node/capitalized?
-                          (capitalized? (:model.node/symbol node)))))))
+       (map (fn [{:model.node/keys [symbol parent] :as node}]
+              (if (not parent)
+                (let [cap? (capitalized? symbol)]
+                  (cond-> node
+                          cap?
+                          (assoc :model.plugin.node-type/capitalized? cap?)))
+                node)))))
 
    :rule/clauses
    '[[(node-type ?node ?type)
       (node-meta ?node :tag ?type)]
      [(node-type ?node ?type)
-      [?node :model.node/symbol ?sym]
-      (root-node ?node ?sym)
-      [?node :model.node/capitalized? ?cap]
-      [(true? ?cap)]
-      [(identity ?sym) ?type]]]})
+      [?node :model.plugin.node-type/capitalized? ?cap]
+      ;; We don't add the attribute unless it's capitalized.
+      ;; so we can skip this clause
+      #_[(true? ?cap)]
+      [?node :model.node/symbol ?type]]]})
 
 (def plugin:type-fields
   "Get all the fields for a symbol.
@@ -126,33 +158,39 @@
   "Default implementation of handling merge conflicts when
   merging meta data for a node. Returning the new value if
   not nil."
-  [env old-value new-value]
+  [k old-value new-value]
   (or new-value old-value))
+
+(defn merge-node
+  "Merge an existing node with a new one."
+  ([db old-node-id new-node]
+    (merge-node db old-node-id new-node default-merge-meta-fn))
+  ([db old-entity-id new-entity merge-fn]
+   (if (or (nil? old-entity-id) (temp-id? old-entity-id))
+     new-entity
+     (let [old-entity (into {:db/id old-entity-id}
+                            (d/entity db old-entity-id))]
+       (into old-entity
+             (map (juxt key (fn [[k v]]
+                              (if-some [old-v (get old-entity k)]
+                                (merge-fn k old-v v)
+                                v))))
+             (dissoc new-entity :db/id))))))
 
 (def plugin:merge-meta
   "Merging metadata between existing nodes and new ones."
   {:pipeline/fn
    (fn [{:keys [db merge-meta-fn]
-         :or   {merge-meta-fn default-merge-meta-fn}
-         :as   pipeline-opts}]
+         :or   {merge-meta-fn default-merge-meta-fn}}]
      (map
-       (fn [node]
-         (let [meta-id (find-meta db (:db/id node))]
-           (if (or (nil? meta-id) (temp-id? meta-id))
-             node
-             (let [old-meta (into {:db/id meta-id} (d/entity db meta-id))
-
-                   merge-fn
-                   (fn [[k v]]
-                     (if-some [old-v (get old-meta k)]
-                       (let [env (assoc pipeline-opts :k k :node node)]
-                         (merge-meta-fn env old-v v))
-                       v))
-
-                   new-meta (into old-meta
-                                  (map (juxt key merge-fn))
-                                  (dissoc (:model.node/meta node) :db/id))]
-               (assoc node :model.node/meta new-meta)))))))})
+       (fn [{:model.node/keys [meta] :as node}]
+         (cond-> node
+                 (seq meta)
+                 (assoc :model.node/meta
+                        (merge-node db
+                                    (find-meta db (:db/id node))
+                                    meta
+                                    merge-meta-fn))))))})
 
 (def default-plugins
   "Plugins added to all model databases. Plugins are used to extend
@@ -174,25 +212,29 @@
   [meta-db]
   (d/entity meta-db [:model.impl/id 1]))
 
-(defn- update-impl [meta-db k f & args]
-  (let [impl (impl-entity meta-db)
-        v (get impl k)]
-    (d/db-with meta-db [[:db/add (:db/id impl) k (apply f v args)]])))
+(defn- assoc-impl [meta-db & kvs]
+  (let [impl (impl-entity meta-db)]
+    (d/db-with meta-db (->> kvs
+                            (partition 2)
+                            (map (fn [[k v]]
+                                   [:db/add (:db/id impl) k v]))))))
 
 (defn db-with-plugins
   "Returns a db with plugins added to it."
   ([meta-db plugins]
-   (let [schema (transduce (map :db/schema)
-                           (partial merge-with merge)
-                           (:schema meta-db)
-                           plugins)
+   (let [impl (impl-entity meta-db)
+         installed-plugin {:db/schema    (:schema meta-db)
+                           :rule/clauses (:model.impl/rules impl)
+                           :pipeline/fn  (:model.impl/pipeline impl)}
+         merged-plugin (apply merge-plugins installed-plugin plugins)
+         schema (:db/schema merged-plugin)
          db (cond
               (nil? meta-db) (d/init-db [] schema)
               (seq schema) (d/init-db (d/datoms meta-db :eavt) schema)
               :else meta-db)]
-     (-> db
-         (update-impl :model.impl/rules into (mapcat :rule/clauses) plugins)
-         (update-impl :model.impl/pipeline into (keep :pipeline/fn) plugins)))))
+     (assoc-impl db
+                 :model.impl/rules (:rule/clauses merged-plugin)
+                 :model.impl/pipeline (:pipeline/fn merged-plugin)))))
 
 (defn init-meta-db
   ([] (init-meta-db nil))
@@ -200,7 +242,7 @@
    (let [db (-> (d/empty-db {:model.impl/id {:db/unique :db.unique/value}})
                 (d/db-with [{:model.impl/id       1
                              :model.impl/rules    []
-                             :model.impl/pipeline []}]))]
+                             :model.impl/pipeline (fn [opts] identity)}]))]
      (db-with-plugins db (concat [{:db/schema model-schema}]
                                  default-plugins
                                  plugins)))))
@@ -284,11 +326,10 @@
    (index-model meta-db model {}))
   ([meta-db model {:keys [pipeline-opts]}]
    (let [impl (impl-entity meta-db)
-         pipeline-fn (fn [opts]
-                       (map #(% opts) (:model.impl/pipeline impl)))]
+         pipeline-fn (:model.impl/pipeline impl)]
      (reduce
        (fn [meta-db root]
-         (let [xf (apply comp (pipeline-fn (assoc pipeline-opts :db meta-db)))]
+         (let [xf (pipeline-fn (assoc pipeline-opts :db meta-db))]
            (->> root
                 (selectors-with-parent-id meta-db)
                 (root->node-seq)

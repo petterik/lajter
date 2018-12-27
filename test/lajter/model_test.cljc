@@ -88,7 +88,7 @@
                    (index-model meta-db
                                 model
                                 {:merge-meta-fn
-                                 (fn [{:keys [k]} a b]
+                                 (fn [k a b]
                                    (if (= k :sources)
                                      (into a b)
                                      (or b a)))}))))))))
