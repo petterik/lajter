@@ -5,33 +5,44 @@
     [lajter.model :as model]
     [lajter.model.db :as db]))
 
+(def ^:dynamic *full-pattern-max-depth* 5)
+
 (defn full-pattern
   "Given root symbol and a db with model indexed, extracts the
    full pull pattern for it, where the pattern conforms to ::model/model
    and not a datascript pattern."
   [model-db root-sym]
-  (let [fields (model/q '{:find  [[?field ...]]
+  (let [field->children
+        (memoize
+          (fn [field]
+            (model/q '{:find  [[?fields ...]]
+                       :in    [$ ?field]
+                       :where [(node-type ?field ?ref-type)
+                               (type-fields ?ref-type ?fields)]}
+                     model-db
+                     field)))
+        field-name
+        (memoize
+          (fn [field]
+            (:model.node/symbol (d/entity model-db field))))
+
+        field->pattern
+        (fn self
+          ([field] (self 0 field))
+          ([depth field]
+           (let [fields (delay (field->children field))]
+             (cond-> [(field-name field)]
+                     (and (< depth *full-pattern-max-depth*)
+                          (seq @fields))
+                     (conj (into []
+                                 (mapcat #(self (inc depth) %))
+                                 @fields))))))
+
+        fields (model/q '{:find  [[?field ...]]
                           :in    [$ ?sym]
                           :where [(type-fields ?sym ?field)]}
                         model-db
-                        root-sym)
-
-        field->children
-        (fn [field]
-          (model/q '{:find  [[?fields ...]]
-                     :in    [$ ?field]
-                     :where [(node-type ?field ?ref-type)
-                             (type-fields ?ref-type ?fields)]}
-                   model-db
-                   field))
-
-        field->pattern
-        (fn self [field]
-          (let [field-name (:model.node/symbol (d/entity model-db field))
-                fields (field->children field)]
-            (cond-> [field-name]
-                    (seq fields)
-                    (conj (into [] (mapcat self) fields)))))]
+                        root-sym)]
 
     [root-sym (into [] (mapcat field->pattern) fields)]))
 
