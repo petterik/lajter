@@ -34,6 +34,13 @@
     rum                                      {:mvn/version "0.11.2"}
     spec-provider                            {:mvn/version "0.4.14"}
     }}
+  :rebl
+  {:extra-deps
+   {org.clojure/core.async {:mvn/version "0.4.490"}
+    com.cognitect/rebl     {:local/root "REBL-0.9.109/REBL-0.9.109.jar"}
+    nrepl/nrepl            {:mvn/version "0.5.0"}
+    nrepl-rebl             {:mvn/version "0.1.1"}
+    }}
   :uberjar
   {:extra-deps
               {pack/pack.alpha

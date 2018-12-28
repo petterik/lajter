@@ -12,3 +12,9 @@
 ## Output
 .rebel_readline_history
 /out
+
+## REBL
+/REBL-0.9.109
+.rebl
+.nrepl
+.nrepl-port
