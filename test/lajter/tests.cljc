@@ -3,6 +3,7 @@
     [clojure.test]
     [lajter.core-test]
     [lajter.layer-test]
+    [lajter.model-test]
     [expound.alpha :as expound]
     [clojure.spec.alpha :as s]
     [clojure.spec.test.alpha :as st]))
