@@ -34,31 +34,8 @@
           model (-> (gql-schema)
                     (get-in [:data :__schema :types])
                     (graphql/schema->model))]
-      (time
-        (let [model-db (model/index-model db model)]
-          #_(count (time (db/datascript-schema model-db)))
-          (binding [pull/*full-pattern-max-depth* 3]
-            (time
-              #_(pull/full-pattern model-db 'Query)
-              (-> (graphql/datafy model-db))
-              )))))))
-
+      (model/index-model db model))))
 
 (comment
-  (require '[clojure.core.protocols :as p])
-  ((fn wrap-nav [m]
-     (with-meta m {`p/nav (fn [m k _]
-                            (wrap-nav (update m k inc)))}))
-    {:a 1 :b 2})
-
-  (p/nav *1 :a nil)
-  ;; {:a 2 :b 2}
-
-  )
-
-
-#_(defn profile-indexing []
-  (let [s (gql-schema)
-        db (model/init-meta-db)
-        model (graphql/schema->model s)]
-    (model/index-model db model)))
+  ;; For REBL use:
+  (graphql/datafy (gql-schema->model-db)))
