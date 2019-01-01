@@ -30,13 +30,13 @@
         (fn self
           ([field] (self 0 field))
           ([depth field]
-           (let [fields (delay (field->children field))]
-             (cond-> [(field-name field)]
-                     (and (< depth *full-pattern-max-depth*)
-                          (seq @fields))
-                     (conj (into []
-                                 (mapcat #(self (inc depth) %))
-                                 @fields))))))
+           (let [fields (field->children field)]
+             (if (empty? fields)
+               [(field-name field)]
+               (if (not (>= depth *full-pattern-max-depth*))
+                 (let [selector (into [] (mapcat #(self (inc depth) %)) fields)]
+                   (when (seq selector)
+                     [(field-name field) selector])))))))
 
         fields (model/q '{:find  [[?field ...]]
                           :in    [$ ?sym]

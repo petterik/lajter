@@ -3,7 +3,10 @@
     [clojure.test :refer :all]
     [clojure.java.io :as jio]
     [clojure.data.json :as json]
+    [datascript.core :as d]
     [lajter.model :as model]
+    [lajter.model.datafy :as datafy]
+    [lajter.model.gen :as gen]
     [lajter.model.graphql :as graphql]
     [lajter.model.db :as db]
     [lajter.model.pull :as pull]
@@ -38,4 +41,5 @@
 
 (comment
   ;; For REBL use:
-  (graphql/datafy (gql-schema->model-db)))
+  (datafy/datafy (gql-schema->model-db))
+  )
