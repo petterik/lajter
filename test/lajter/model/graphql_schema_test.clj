@@ -21,25 +21,31 @@
   (jio/resource "test/graphql/github-schema.json"))
 
 (defn gql-schema []
-  (with-open [reader (jio/reader gql-schema-file)]
-    (json/read reader
-               :key-fn keyword
-               :value-fn (fn omit [k v]
-                           (cond
-                             (nil? v) omit
-                             (and (coll? v) (empty? v)) omit
-                             (contains? #{:name :kind} k) (symbol v)
-                             :else v)))))
+  (graphql/parse-schema-str (slurp gql-schema-file)))
 
 (defn gql-schema->model-db []
   (time
     (let [db (model/init-meta-db [graphql/plugin:graphql])
           model (-> (gql-schema)
-                    (get-in [:data :__schema :types])
                     (graphql/schema->model))]
       (model/index-model db model))))
 
 (comment
   ;; For REBL use:
   (datafy/datafy (gql-schema->model-db))
+
+  (def model-db *1)
+
+  (count )
+  (require '[clojure.edn :as edn])
+  (edn/read-string {:readers (merge *data-readers* d/data-readers)} (pr-str model-db))
+
+
+
+
+  (db/datascript-schema model-db)
+
+  (def schema *1)
+  (count schema)
+
   )

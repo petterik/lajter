@@ -5,10 +5,10 @@
     [lajter.logger :refer [log]]
     [lajter.protocols :as p]
     [lajt.parser]
-    [lajt.read]
     [clojure.set :as set]
     [om.dom :as dom]
-    #?@(:cljs [[goog.object :as gobj]])))
+    #?@(:cljs [[goog.object :as gobj]])
+    [lajter.model :as model]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Component functions
@@ -123,11 +123,6 @@
 (defn get-root-query [reconciler]
   (get-full-query reconciler (get-root reconciler)))
 
-(defn query-keys [query]
-  (into #{}
-        (map :lajt.parser/key)
-        (lajt.parser/query->parsed-query query)))
-
 ;; Make this trigger. We need a main.
 
 ;; TODO: Replace with component's protocol.
@@ -208,7 +203,8 @@
   (get-reconciler [this] this)
   IStoppable
   (stop! [this]
-    (remove-watch (:app-state config) ::reconciler))
+    (some-> (:app-state config)
+            (remove-watch ::reconciler)))
   p/IEnvironment
   (to-env [this]
     ;; TODO: Fix recursion here.

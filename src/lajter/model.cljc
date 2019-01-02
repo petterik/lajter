@@ -327,7 +327,8 @@
                 (into [] xf)
                 (d/db-with meta-db))))
        meta-db
-       (s/conform ::model model)))))
+       (when (seq model)
+         (s/conform ::model model))))))
 
 (defn- find-index
   "Finds the first index where pred is truthy in coll."

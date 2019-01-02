@@ -1,18 +1,26 @@
 (ns ^:figwheel-hooks lajter.web.main
   (:require
+    [datascript.core :as d]
     [devtools.core :as devtools]
-    [lajter.logger :refer [log]]
     [lajter.core :as la]
+    [lajter.logger :refer [log]]
+    [lajter.model :as model]
+    [lajter.model.db :as db]
+    [lajter.model.graphql :as graphql]
+    [lajter.model.pull :as pull]
     [lajter.protocols :as p]
+    [lajter.web.gql-schema :as gql-schema]
     [react-dom :as react-dom]
-    [om.dom :as dom]))
+    [om.dom :as dom]
+    [goog.net.XhrIo :as xhrio]))
 
 (defn button [label f]
   (dom/button #js {:onClick f} (dom/span nil label)))
 
 (def ComponentB
   {:lajter/id    :lajter.web.main/ComponentB
-   :lajter/query [:foo :baz]
+   :lajter/query '[Query
+                   [viewer [login]]]
    :displayName  "lajter.web.main/ComponentB"
    :render       (fn [this props state]
                    (dom/div nil
@@ -36,7 +44,8 @@
 (def ComponentA
   {:lajter/id       :lajter.web.main/ComponentA
    :lajter/children [ComponentB]
-   :lajter/query    [:foo {:bar [:a]}]
+   :lajter/query    '[Query
+                      [viewer [databaseId]]]
    :lajter/computed (fn [parent]
                       {ComponentB
                        {:update-parent
@@ -53,8 +62,8 @@
                         (la/render-child this ComponentB)))
    :getDerivedStateFromProps
                     (fn [_ props state]
-                      {:initial-state (-> props :bar first)
-                       :counter       (-> props :foo last)})})
+                      {:initial-state 0
+                       :counter       (-> props :query/viewer :user/databaseId)})})
 
 (def NavbarA
   {:lajter/id :lajter.web.main/NavbarA
@@ -101,6 +110,17 @@
 
 (defonce reconciler-atom (atom nil))
 
+(defn dedupe-query [query]
+  (let [query-db (model/index-model (model/init-meta-db) query)]
+    (into []
+          (mapcat (fn self [[e]]
+                    (let [sym (:v (first (d/datoms query-db :eavt e :model.node/symbol)))
+                          children (d/datoms query-db :avet :model.node/parent e)]
+                      (cond-> [sym]
+                              (seq children)
+                              (conj (into [] (mapcat self) children))))))
+          (d/datoms query-db :avet :model.plugin.root-node/root? true))))
+
 (defn ^:after-load runit! []
   (when-let [r @reconciler-atom]
     (la/stop! r)
@@ -128,6 +148,7 @@
                          :bar     {:a :b}
                          :baz     "foo"})
         remote-state (atom @app-state)
+        #_#_
         send-fn (fn [reconciler cb query target]
                   (log "would send query: " query
                        " to target: " target)
@@ -145,15 +166,36 @@
                                  (remove (comp symbol? key))
                                  remote-parse)))
                     2000))
+        send-fn (fn [reconciler cb query target]
+                  (let [gql-query (graphql/pattern->query query)]
+                    (xhrio/send "https://api.github.com/graphql"
+                                (fn [response]
+                                  (log "Response: " response))
+                                "POST"
+                                (str "{\"query\":\"" gql-query "\"}")
+                                #js {"Authorization"
+                                     (str "bearer " gql-schema/github-token)}))
+                  (cb {}))
+        model-db
+        (->> (graphql/parse-schema-str gql-schema/gql-schema)
+             (graphql/schema->model)
+             (model/index-model (model/init-meta-db [graphql/plugin:graphql])))
+        #_#_app-state (d/create-conn (db/datascript-schema model-db))
+
         config {:root-render    react-dom/render
                 :remotes        [:remote]
+                :parser         (fn [env query & [target]]
+                                  (let [pattern (dedupe-query query)]
+                                    (if (some? target)
+                                      pattern
+                                      {})))
                 :state          app-state
-                :read           (lajt.read/->read-fn
+                #_#_:read           (lajt.read/->read-fn
                                   (fn [k]
                                     {:custom (fn [env] (get @(:state env) k))
                                      :remote true})
                                   {})
-                :mutate         mutate
+                #_#_:mutate         mutate
                 :send-fn        send-fn
                 :merge-fn       (fn [reconciler env value]
                                   (merge (:db env) value))
@@ -165,7 +207,20 @@
         reconciler (la/mount config Router (.getElementById js/document "app"))]
 
     (reset! reconciler-atom reconciler)
-    (la/schedule-render! reconciler)))
+    (la/schedule-render! reconciler)
+
+    (let [config (:config reconciler)
+          this reconciler
+          target :remote
+          query (dedupe-query (la/get-root-query reconciler))
+          cb #(log "CB: " %)
+          ]
+      (log "MY OWN SEND: " query)
+      ((:send-fn config) this cb query target))
+    ;; responds with:
+    ;; {"data":{"viewer":{"databaseId":715415,"login":"petterik"}}}
+
+    ))
 
 (defn -main [& args]
   (enable-console-print!)

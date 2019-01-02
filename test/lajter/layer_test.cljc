@@ -1,7 +1,6 @@
 (ns lajter.layer-test
   (:require
     [lajter.layer :as layer]
-    [lajter.core :as la]
     [lajt.parser :as parser]
     [clojure.spec.alpha :as s]
     [clojure.test :refer [deftest is are]]
@@ -77,8 +76,9 @@
   {:layer.remote/mutates (cond-> {}
                                  (seq remote-mutates)
                                  (assoc :remote remote-mutates))
-   :layer.remote/keys    (set (concat (la/query-keys remote-mutates)
-                                      (la/query-keys remote-reads)))
+   ;; TODO: Find another home for query-keys (or remove)?
+   :layer.remote/keys    (set (concat (layer/query-keys remote-mutates)
+                                      (layer/query-keys remote-reads)))
    :layer.remote/reads   (cond-> {}
                                  (seq remote-reads)
                                  (assoc :remote remote-reads))

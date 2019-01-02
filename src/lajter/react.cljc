@@ -5,7 +5,7 @@
                with-this]]))
   (:require
     [lajter.logger]
-    [lajt.parser]
+    [lajter.model :as model]
     [lajter.protocols :as p]
     [clojure.set :as set]
     #?(:clj [medley.core :as medley])
@@ -295,9 +295,19 @@
 (defn- query-keys
   "Returns the keys of the component's query."
   [spec]
-  (into #{}
-        (map :lajt.parser/key)
-        (lajt.parser/query->parsed-query (:lajter/query spec))))
+  (let [query (:lajter/query spec)]
+    #_(into #{}
+          (map :lajt.parser/key)
+          (lajt.parser/query->parsed-query query))
+    ;; Is this really needed anymore?
+    (->> (model/q '{:find  [?root ?field-sym]
+                    :where [(type-fields ?root ?field)
+                            [?field :model.node/symbol ?field-sym]]}
+                  (model/index-model (model/init-meta-db)
+                                     query))
+         (into #{}
+               (map (fn [[root field]]
+                      (keyword root field)))))))
 
 (defn- create-react-class [methods statics]
   #?(:clj
