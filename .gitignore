@@ -18,3 +18,5 @@
 .rebl
 .nrepl
 .nrepl-port
+
+/resources/public/cljs-out

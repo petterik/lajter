@@ -1,3 +1,6 @@
 ^{:watch-dirs ["env/dev" "src" "test"]
   :open-url false}
-{:main "lajter.web.main"}
+{:main "lajter.web.main"
+ :output-to  "resources/public/cljs-out/dev-main.js"
+ :output-dir "resources/public/cljs-out/dev"
+ :asset-path "/cljs-out/dev"}

@@ -10,17 +10,18 @@
 ;; The values are functions taking the field they came from.
 ;; We can use the metadata on the field to better generate fields.
 (def known-generators
-  {'String     (constantly gen/string)
-   'Keyword    (constantly gen/keyword-ns)
-   'UUID       (constantly gen/uuid)
-   'ID         (constantly (gen/fmap #(str "ID-" %) gen/uuid))
-   'Integer    (constantly gen/int)
-   'Float      (constantly (gen/fmap float gen/double))
-   'BigDecimal (constantly (gen/fmap (comp bigdec float)
-                                     (gen/double* {:infinite? false
-                                                   :NaN? false
-                                                   :min -1e5
-                                                   :max 1e5})))})
+  {'String  (constantly gen/string)
+   'Keyword (constantly gen/keyword-ns)
+   'UUID    (constantly gen/uuid)
+   'ID      (constantly (gen/fmap #(str "ID-" %) gen/uuid))
+   'Integer (constantly gen/int)
+   'Float   (constantly (gen/fmap float gen/double))
+   #?@(:clj ['BigDecimal
+             (constantly (gen/fmap (comp bigdec float)
+                                   (gen/double* {:infinite? false
+                                                 :NaN?      false
+                                                 :min       -1e5
+                                                 :max       1e5})))])})
 
 (defn- field-types
   "Given an type symbol, finds all the fields defined for the type
