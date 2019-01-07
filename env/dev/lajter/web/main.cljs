@@ -185,6 +185,7 @@
         config {:root-render    react-dom/render
                 :remotes        [:remote]
                 :parser         (fn [env query & [target]]
+                                  (log "query: " query)
                                   (let [pattern (dedupe-query query)]
                                     (if (some? target)
                                       pattern
@@ -220,6 +221,20 @@
     ;; responds with:
     ;; {"data":{"viewer":{"databaseId":715415,"login":"petterik"}}}
 
+    ;; TODO: Actually merge a response.
+    ;; TODO: Model mutations.
+    ;;       * Remote mutations could be a field on the Mutate type?
+    ;;         - '[Mutate [^{:a 1 :b 2} add-foo]] <--- gross?
+    ;;       * How do we model local mutations?
+    ;;       * How can we do local and remote mutations?
+    ;; Remember: Parser is a made up thing by om.next. It could be more
+    ;;           than a 2- or 3-arity function.
+    ;;           - It could be a set of functions.
+    ;;             :local-query
+    ;;             :remote-query
+    ;;             :local-mutations
+    ;;             :remote-mutations
+    ;; I think it's time for input argument syntax. >:(
     ))
 
 (defn -main [& args]
