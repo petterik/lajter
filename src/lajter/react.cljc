@@ -301,10 +301,10 @@
           (lajt.parser/query->parsed-query query))
     ;; Is this really needed anymore?
     (->> (model/q '{:find  [?root ?field-sym]
-                    :where [(type-fields ?root ?field)
+                    :where [(root-node _ ?root)
+                            (type-fields ?root ?field)
                             [?field :model.node/symbol ?field-sym]]}
-                  (model/index-model (model/init-meta-db)
-                                     query))
+                  (model/index-model (model/init-meta-db) query))
          (into #{}
                (map (fn [[root field]]
                       (keyword root field)))))))

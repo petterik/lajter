@@ -197,7 +197,7 @@
                                   {})
                 #_#_:mutate         mutate
                 :send-fn        send-fn
-                :merge-fn       (fn [reconciler env value]
+                :merge-fn       (fn [env value]
                                   (merge (:db env) value))
                 :route-fn       (fn [env {:lajter.routing/keys
                                           [route choices]}]

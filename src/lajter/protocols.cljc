@@ -44,4 +44,5 @@
 
 (defprotocol ILayers
   (add-layer! [this layer])
-  (replace-layer! [this tx-id with-layer]))
+  (merge-layer! [this tx-id with-layer])
+  (capture-snapshot! [this]))
