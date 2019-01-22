@@ -363,3 +363,21 @@
   (let [query-rules (:model.impl/rules (impl-entity model-db))
         [inputs query] (query-with-rules query-map inputs query-rules)]
     (apply d/q query model-db inputs)))
+
+(defn db->model
+  "Takes a db indexed with models, returns the model.
+  Does not include metadata by default."
+  ([model-db]
+    (db->model model-db nil))
+  ([model-db {:keys [include-meta?]}]
+   (into []
+         (mapcat (fn self [[e]]
+                   (let [children (d/datoms model-db :avet :model.node/parent e)
+                         sym (:v (first (d/datoms model-db :eavt e :model.node/symbol)))
+                         sym (cond-> sym
+                                     include-meta?
+                                     (with-meta (into {} (d/entity model-db (:v (first (d/datoms model-db :eavt e :model.node/meta)))))))]
+                     (cond-> [sym]
+                             (seq children)
+                             (conj (into [] (mapcat self) children))))))
+         (d/datoms model-db :avet :model.plugin.root-node/root? true))))

@@ -103,7 +103,7 @@
          (= (*render* expected)
             (p/reconcile!
               (doto (la/mount config spec)
-                (la/transact! query))))
+                (la/omish-transact! query))))
       (*div* "hello world")
       {:render (fn [this props state]
                  (*div* "hello world"))}
@@ -183,7 +183,7 @@
                                             (filter (comp keyword? key))
                                             value)))}
         reconciler (doto (la/mount config Root)
-                     (la/transact! '[(set-state {:foo 2}) :foo])
+                     (la/omish-transact! '[(set-state {:foo 2}) :foo])
                      (p/reconcile!))]
     (is (nil? (agent-error remote-state)))
     (await remote-state)

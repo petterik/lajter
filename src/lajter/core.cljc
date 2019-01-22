@@ -1,10 +1,14 @@
 (ns lajter.core
   (:require
+    [clojure.spec.alpha :as s]
+    [clojure.set :as set]
+    [datascript.core :as d]
     [lajter.react]
     [lajter.logger :refer [log]]
     [lajter.protocols :as p]
-    #?@(:cljs [[goog.object :as gobj]])
-    ))
+    [lajter.model :as model]
+    [medley.core :as m]
+    #?@(:cljs [[goog.object :as gobj]])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Component functions
@@ -311,8 +315,108 @@
                                     :snapshot/layer-ids new-layer-ids
                                     :snapshot/db        new-db}))))
 
+(defn- merge-queries [queries]
+  (let [queries (filterv seq queries)]
+    (case (count queries)
+      0 nil
+      1 (first queries)
+      (-> (reduce model/index-model (model/init-meta-db) queries)
+          (model/db->model)))))
 
-(defn transact! [x query]
+(defn- expand-reads
+  "Adds pull patterns to a seq of read symbols."
+  [reconciler expandable]
+  ;; TODO: Expand all symbols to queries as seen in the transact! docstring.
+  ;; Should be a simple query once all the rendered components are indexed.
+  )
+
+(defn- remote-reads
+  [env query]
+  ;; TODO: Re-define how remote reads are answered.
+  ;;       The parser abstraction doesn't really make sense anymore?
+  (into {}
+        (keep (fn [target]
+                (when-let [query ((:parser env) env query target)]
+                  [target query])))
+        (:remotes env)))
+
+(defn- remote-mutations [reconciler mutations]
+  {:pre [(s/valid? (s/* ::mutation) mutations)]}
+  ;; TODO: Redefine how remotes work.
+  ;; Should be able to ask our remotes whether a single mutation
+  ;; is answerable. Or the entire set at once.
+  )
+
+(s/def ::mutation (s/cat :lajter.mutation/key keyword?
+                         :lajter.mutation/params (s/? map?)))
+(s/def ::transaction
+  (s/+ (s/alt :mutation ::mutation
+              :query (s/nonconforming ::model/model)
+              :expand qualified-symbol?)))
+
+(defn transact*
+  "Transacts a map of mutations, queries and read symbols that get
+  expanded to include the pull patterns of all the components currently
+  rendered."
+  [x {:keys [mutations queries expands]}]
+  (let [reconciler (p/get-reconciler x)
+        env (p/to-env reconciler)
+        reads (merge-queries (cond-> (concat queries (expand-reads reconciler expands))
+                                     (component? x)
+                                     (conj (get-query x))))
+        reads-by-remote (remote-reads env reads)
+        mutations-by-remote (remote-mutations env mutations)
+        layer (layer:transaction-layer
+                env
+                {:lajter.layer/reads            reads
+                 :lajter.layer/mutations        mutations
+                 :lajter.layer/remote-reads     reads-by-remote
+                 :lajter.layer/remote-mutations mutations-by-remote})]
+    (p/add-layer! reconciler layer)
+    (schedule-sends! reconciler)
+    (schedule-render! reconciler)))
+
+(defn transact!
+  "Takes an IHasReconciler and a transaction as defined by ::transaction.
+
+  ## Read symbol expansions:
+  Providing qualified symbols will make them expand to a query containing
+  a pull pattern by merging the queries of all components currently
+  rendered, filtered by the name of the symbol. For example, given that
+  there's a rendered component with query [Query [user [name]] [feed [title]]]
+  and 'Query/user is provided to transact!: 'Query/user will be expanded to
+  '[Query [user [name]]].
+
+  This expansion exists to let the developer just specify the query roots whenever
+  a mutation happens, rather than the whole query, leaving the decision of what
+  to render to the components.
+
+  To avoid expansion, one can specify a whole query as defined by ::model/model.
+
+  ## Example calls:
+  - (la/transact! this :mutate/no-args)
+  - (la/transact! this :mutate/with-args {:arg 1})
+  - (la/transact! this :mutate/any-number-of-mutations
+                       :mutate/2 {}
+                       :mutate/3
+                       :mutate/4 {})
+  - (la/transact! this :mutate/then-expand-read
+                       'Query/read-this)
+  - (la/transact! this :mutate/then-query
+                       '[Query [read-this]])
+  - (la/transact! this 'Query/expand-read-only)"
+  [x & transaction]
+  {:pre [(s/valid? ::transaction transaction)]}
+  (let [tx-map (->> (s/conform ::transaction transaction)
+                    (group-by first)
+                    (m/map-vals (partial mapv second)))]
+    (transact* x (set/rename-keys tx-map {:mutation :mutations
+                                          :query    :queries
+                                          :expand   :expands}))))
+
+
+(defn ^:deprecated omish-transact!
+  [x query]
   (let [reconciler (p/get-reconciler x)
         env (p/to-env reconciler)
         layer (layer:transaction-layer env query)]
@@ -540,3 +644,10 @@
                 (fn [k ref old-state new-state]
                   (schedule-render! reconciler)))
      reconciler)))
+
+;; TODO: Re-define how remotes are defined.
+;; TODO: Re-define how components are indexed. Needs to be able to expand reads.
+;; TODO: Review layers, now that we've got local/remote mutations as before.
+;; TODO: Execute mutations (local and remote).
+;; TODO: Parse and merge GraphQL remote responses.
+;; ..... done?

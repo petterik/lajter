@@ -30,14 +30,14 @@
                      (button "Update counter"
                              #(la/update-state! this update :counter (fnil inc 0)))
                      (button "Add to foo"
-                             #(la/transact! this `[(foo/conj ~{:x (rand-int 100)})]))
+                             #(la/omish-transact! this `[(foo/conj ~{:x (rand-int 100)})]))
                      (button "Remove from foo"
-                             #(la/transact! this '[(foo/pop)]))
+                             #(la/omish-transact! this '[(foo/pop)]))
                      (button "Assoc to bar"
-                             #(la/transact! this `[(bar/assoc ~{:k (rand-int 100)
-                                                                :v (rand-int 100)})]))
+                             #(la/omish-transact! this `[(bar/assoc ~{:k (rand-int 100)
+                                                                      :v (rand-int 100)})]))
                      (button "Dissoc from bar"
-                             #(la/transact! this `[(bar/dissoc)]))
+                             #(la/omish-transact! this `[(bar/dissoc)]))
                      (button "Update parent state"
                              (la/get-computed this :update-parent))))})
 
@@ -97,12 +97,12 @@
        (dom/p nil "ROUTER")
        (dom/div nil
          (dom/span nil "Set navbar:")
-         (button "A" #(la/transact! this `[(route/set {:navbar :route.navbar/a})]))
-         (button "B" #(la/transact! this `[(route/set {:navbar :route.navbar/b})])))
+         (button "A" #(la/omish-transact! this `[(route/set {:navbar :route.navbar/a})]))
+         (button "B" #(la/omish-transact! this `[(route/set {:navbar :route.navbar/b})])))
        (dom/div nil
          (dom/span nil "Set body:")
-         (button "A" #(la/transact! this `[(route/set {:body :route.body/a})]))
-         (button "B" #(la/transact! this `[(route/set {:body :route.body/b})])))
+         (button "A" #(la/omish-transact! this `[(route/set {:body :route.body/a})]))
+         (button "B" #(la/omish-transact! this `[(route/set {:body :route.body/b})])))
        (dom/p nil "NAVBAR: ")
        (la/render-route this :navbar)
        (dom/p nil "BODY: ")
